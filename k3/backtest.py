@@ -49,7 +49,10 @@ def _tradable_now(ts) -> bool:
 
 
 def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
-                    df: Optional[Any] = None, enter_tiers=("ACTIVE", "WATCH")) -> Dict[str, Any]:
+                    df: Optional[Any] = None, enter_tiers=("ACTIVE", "WATCH"),
+                    start_bar: int = 80) -> Dict[str, Any]:
+    # start_bar: begin the trade loop here (signals are still computed on the
+    # full history) — used for honest out-of-sample slices in tier calibration.
     sym = symbol.upper().replace("/", "")
     r = p.risk
     if df is None:
@@ -74,7 +77,7 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
     def fee(x: float) -> float:
         return abs(x) * (r.commission + r.slippage)
 
-    for i in range(80, len(df) - 1):
+    for i in range(max(80, start_bar), len(df) - 1):
         if pos is not None:
             pos["bars"] += 1
             side = pos["side"]

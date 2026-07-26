@@ -178,6 +178,41 @@ def cmd_causaltest(a) -> None:
             sys.exit(1)
 
 
+def cmd_scalp2(a) -> None:
+    from k3.scalp2 import MAJORS5, compare, print_compare
+    symbols = [s.upper() for s in a.symbols] if a.symbols else MAJORS5
+    p = get_profile("scalp")
+    print(f"\n>>> K3 scalp2 comparison | {p.name} {p.timeframe} | {len(symbols)} symbols bars={a.limit}")
+    res = compare(symbols, p, limit=a.limit, ote_level=a.ote, cancel_bars=a.cancel_bars)
+    print_compare(res)
+    path = _save(f"k3_scalp2_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+    print(f"\nreport: {path}")
+
+
+def cmd_tiercal(a) -> None:
+    from k3.tiercal import tiercal, print_report
+    symbols = [s.upper() for s in a.symbols] if a.symbols else discover_top10()
+    for name in _profiles(a.profile):
+        p = get_profile(name)
+        print(f"\n>>> K3 tier recalibration | {p.name} {p.timeframe} | {len(symbols)} symbols")
+        res = tiercal(symbols, p, limit=a.limit)
+        print_report(res)
+        path = _save(f"k3_tiercal_{p.name}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+        print(f"\nreport: {path}")
+
+
+def cmd_groupstudy(a) -> None:
+    from k3.groupstudy import groupstudy, print_report
+    symbols = [s.upper() for s in a.symbols] if a.symbols else discover_top10()
+    for name in _profiles(a.profile):
+        p = get_profile(name)
+        print(f"\n>>> K3 group IC study | {p.name} {p.timeframe} | {len(symbols)} symbols")
+        res = groupstudy(symbols, p, limit=a.limit, forward=a.forward_bars)
+        print_report(res)
+        path = _save(f"k3_groupstudy_{p.name}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+        print(f"\nreport: {path}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="KIMI K3 futures system")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -222,6 +257,26 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--bars", type=int, default=600)
     p.set_defaults(fn=cmd_causaltest)
+
+    p = sub.add_parser("groupstudy")
+    p.add_argument("--profile", default="both", choices=["scalp", "day", "both"])
+    p.add_argument("--symbols", nargs="*", default=None)
+    p.add_argument("--limit", type=int, default=1500)
+    p.add_argument("--forward-bars", type=int, default=None)
+    p.set_defaults(fn=cmd_groupstudy)
+
+    p = sub.add_parser("tiercal")
+    p.add_argument("--profile", default="both", choices=["scalp", "day", "both"])
+    p.add_argument("--symbols", nargs="*", default=None)
+    p.add_argument("--limit", type=int, default=1500)
+    p.set_defaults(fn=cmd_tiercal)
+
+    p = sub.add_parser("scalp2")
+    p.add_argument("--symbols", nargs="*", default=None)
+    p.add_argument("--limit", type=int, default=1500)
+    p.add_argument("--ote", type=float, default=0.705)
+    p.add_argument("--cancel-bars", type=int, default=12)
+    p.set_defaults(fn=cmd_scalp2)
 
     args = ap.parse_args()
     try:

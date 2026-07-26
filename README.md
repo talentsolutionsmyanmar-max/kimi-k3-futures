@@ -33,6 +33,10 @@ python k3.py scan --profile both                # live setups, both profiles
 python k3.py backtest --profile day --limit 1500
 python k3.py research --profile scalp           # walk-forward validation
 python k3.py leaktest                           # random-walk look-ahead regression (must lose)
+python k3.py causaltest                         # causal truncation test: output at t must not change when the future is cut
+python k3.py groupstudy --profile both          # per-group rank IC vs forward returns — does the fusion have edge at all?
+python k3.py tiercal --profile both             # tier recalibration: train 60% thresholds, OOS 40% verdict
+python k3.py scalp2                             # Phase 5: OTE limit-entry mechanics vs market-entry baseline
 python k3.py replay                             # order-flow overlay validation (accruing)
 python k3.py scan --symbols BTCUSDT SOLUSDT --capital 25000 --profile day
 ```
@@ -48,8 +52,10 @@ python k3.py scan --symbols BTCUSDT SOLUSDT --capital 25000 --profile day
 | Sweep filter | volume ≥ 1.15× | off |
 | Tiers (ACTIVE/WATCH) | 64 / 52 | 62 / 50 |
 
-Tiers are **empirically calibrated**: on the majors the K3 composite's q95 ≈ 50–52 and
-q99 ≈ 61–63, so ACTIVE fires on roughly the top 1% of bars — selective by construction.
+Tiers are calibrated on the majors' composite distribution (q95 ≈ 50–52, q99 ≈ 61–63)
+so ACTIVE fires on roughly the top 1% of bars — selective by construction. The 2026-07-27
+OOS recalibration (`tiercal`) found **no threshold that beats them out-of-sample**, so
+they ship as-is but are labeled *un-validated*, not "empirical".
 
 ## Validation results — the honest baseline (2026-07-26, post Fable5 audit)
 
@@ -77,6 +83,62 @@ verifiable — `leaktest` must pass, walk-forward gates research, and any claim 
 can't survive both is not shipped. That is the Fable5 provenance doctrine applied
 to K3 itself, not just its failures.
 
+## Fable5 audit round 2 (2026-07-27) — four directives + Phase 5
+
+**1. Causal truncation test adopted (`k3/causaltest.py`, verbatim from Fable5).**
+Truncate the series at bar *t*; every computed value at *t* must be bitwise-identical
+to the full-series run. `python3 k3.py causaltest --profile both` → **PASS, 0
+violations**, both profiles, exit-gated in CI fashion (exit 1 on any violation).
+Economic (leaktest) + causal (causaltest) = the complete gate.
+
+**2. Tier recalibration done the honest way (`python3 k3.py tiercal`).** The shipped
+tiers were calibrated in-sample on the *leaked* engine — meaningless. Redone:
+candidate thresholds from train-60% score quantiles only, verdict on the untouched
+OOS 40%. With a breadth gate (a candidate must trade on ≥ half the universe — a
+threshold "validated" on one symbol is multiple-comparisons noise): **no candidate
+cleared the adoption gate on either profile. Shipped tiers kept (64/52, 62/50),
+now labeled un-validated rather than falsely "empirical".**
+
+**3. KAITO-class single-symbol PFs are noise.** No single-symbol result is ever
+promoted; only universe-breadth results count. Standing discipline, no exception.
+
+**4. Group-level IC study (`python3 k3.py groupstudy`) — the verdict is blunt.**
+Per-group Spearman rank IC vs forward returns (5m fwd 12 bars; 15m fwd 8 bars),
+10 symbols, no fitting:
+
+| Group | SCALP mean IC | DAY mean IC | Verdict |
+|---|---|---|---|
+| Structure | n/a (too discrete) | n/a (too discrete) | can't measure — event-sparse |
+| Liquidity | −0.002 | **+0.036 (90% of symbols positive)** | the only non-negative group |
+| Momentum | −0.025 | −0.071 | **inverted — trend-following is contrarian at these horizons** |
+| Volatility | −0.055 (inverted) | −0.035 (inverted) | expansion energy predicts reversal |
+| Positioning | +0.011 | −0.032 | none |
+| **Composite** | **−0.041** | **−0.047** | **mildly inverted — no edge as constructed** |
+
+Signal-bar directional accuracy: **44.9% SCALP / 42.9% DAY — below a coin flip.**
+Mean payoff per signal bar (+0.11% / +0.14%) barely covers the taker round trip
+(~0.11%) even before the losing-side skew. **The 5-group fusion does not currently
+have edge. Any future K3 signal work must start from this fact, not from parameter
+sweeps.**
+
+**5. Phase 5 — SCALP resurrection via mechanics, not tuning (`python3 k3.py scalp2`).**
+New `k3/scalp2.py`: hard gates (sweep + displacement + 15m struct_state alignment +
+kill zone + volatility regime), **limit entries at the 70.5% OTE level** (order rests
+≤12 bars, fill-or-cancel, never assume better than limit), structural stops beyond the
+impulse origin, **maker fees 0.02%** on limit entries and TP exits (taker 0.075% on
+stops with gap-through). Result on 5 majors, same 1500 bars:
+
+| | trades | net P&L |
+|---|---|---|
+| Market-entry baseline | 217 | **−$18,478** |
+| scalp2 OTE limit-entry | 21 | **−$1,793** |
+
+The mechanics work as designed — 10× selectivity, 90% less bleeding — but scalp2 is
+**still net negative and 21 trades is too thin for significance**. Verdict: the entry
+mechanics are validated as *cost control*, not as an edge. SCALP remains experimental
+and the dashboard continues to demote it outside kill zones.
+
+
 ## Architecture
 
 ```
@@ -94,7 +156,12 @@ k3/
   orderflow.py  # CVD, delta z-score, book imbalance from aggTrade + depth10
   replay.py     # order-flow overlay validation against accrued history
   leaktest.py   # random-walk look-ahead regression test (must lose on coin flips)
-k3.py           # CLI: top10 | universe | scan | backtest | research | leaktest | replay
+  causaltest.py # causal truncation test (output at t invariant to cutting the future)
+  groupstudy.py # per-group rank IC vs forward returns — edge measurement, not fitting
+  tiercal.py    # train-only tier thresholds with breadth-gated OOS adoption verdict
+  scalp2.py     # Phase 5: OTE limit-entry / maker-fee mechanics + baseline comparison
+  screener.py   # all-perp universe screener (range / tape / drift / funding ranks)
+k3.py           # CLI: top10 | universe | scan | backtest | research | leaktest | causaltest | groupstudy | tiercal | scalp2 | replay
 reports/        # JSON artifacts of every run
 ```
 
