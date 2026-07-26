@@ -7,7 +7,7 @@ three pieces are recreated here in code form so the pipeline is reproducible.
 
 | Asset | Role | Cadence |
 |---|---|---|
-| **K3 Live Engine** (`k3/livefeed.py`, launchd service) | Dependency-free websocket consumer (`fstream.binancefuture.com`, `!markPrice@arr@1s`) streaming tick mark prices for all symbols; detects Entry / Stop / TP1-3 touches against the latest scanner setups. ENTRY alerts fire only inside non-caution kill zones; STOP/TP always. | 1 s ticks, 24/7 |
+| **K3 Live Engine** (`k3/livefeed.py`, launchd service) | Dependency-free websocket consumer (`fstream.binancefuture.com`) streaming 21 streams on one socket: `!markPrice@arr@1s` plus `<sym>@aggTrade` + `<sym>@depth10@100ms` for every universe symbol. Tick mark prices, Entry / Stop / TP1-3 touch detection (ENTRY alerts only inside non-caution kill zones; STOP/TP always), and order flow via `k3/orderflow.py`: rolling CVD 1m/5m, delta z-score, EMA top-10 book imbalance. | 1 s ticks / 5 s order-flow snapshots, 24/7 |
 | **K3 Futures Scanner** (code Automation) | Scans the top-10 futures universe with `k3.py scan --live`; mark prices come from the live engine's tick file when ≤45 s fresh (REST fallback); enriches every setup with distance-to-entry, R-now, quantity/notional, kill-zone state and recent touch events; delivers the artifact to the Widget. | Cron `8,23,38,53 * * * *` UTC (every 15 min) |
 | **K3 Live Futures Board** (Widget) | World-class dark command UI: kill-zone hero with session progress, tradeable-now banner, trade tickets with Entry / SL / TP ladder / live mark / R-now / timeframe badges, score rings, price ladder. | Refreshes on every scanner delivery |
 | **K3 Kill-Zone Alarm** (condition Automation) | Checks every 1 min; fires once per *new* alert signature — either a live-engine touch (Entry in kill zone, or any Stop/TP hit) or a new tradeable setup (ACTIVE + gates pass + in kill zone). Appends to `reports/alarms.jsonl` and pushes a desktop notification that opens the board. | Condition, 1-min checks, fires only on new alerts |
@@ -15,6 +15,7 @@ three pieces are recreated here in code form so the pipeline is reproducible.
 ## Data files produced
 
 - `reports/live_prices.json` — latest tick mark prices from the live engine (1 s).
+- `reports/orderflow.json` — CVD 1m/5m, delta z-score, book imbalance per symbol (5 s).
 - `reports/stream_events.jsonl` — every detected Entry/SL/TP touch event.
 - `reports/stream_alert.json` — current alert signature + events (alarm input).
 - `reports/live_snapshots.jsonl` — one full scanner artifact per run (history).

@@ -37,6 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from k3.killzones import session_state  # noqa: E402
+from k3.orderflow import OrderflowTracker  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 REPORTS = ROOT / "reports"
@@ -44,19 +45,31 @@ SNAPSHOTS = REPORTS / "live_snapshots.jsonl"
 PRICES_OUT = REPORTS / "live_prices.json"
 EVENTS_OUT = REPORTS / "stream_events.jsonl"
 ALERT_OUT = REPORTS / "stream_alert.json"
+ORDERFLOW_OUT = REPORTS / "orderflow.json"
 STATE_FILE = REPORTS / "live_state.json"
 LOG_FILE = REPORTS / "livefeed.log"
 
 # NOTE: fstream.binance.com completes the handshake from this network but never
 # delivers frames; fstream.binancefuture.com streams correctly (verified live).
 WS_HOST = "fstream.binancefuture.com"
-WS_PATH = "/stream?streams=!markPrice@arr@1s"
 REST_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
 
 HEARTBEAT_SEC = 30          # reconnect if no message this long
 REST_FALLBACK_AFTER = 3     # consecutive ws failures before REST mode
 WS_RETRY_SEC = 120          # while in REST mode, retry ws this often
 PRICE_WRITE_MIN_SEC = 1.0   # throttle live_prices.json writes
+ORDERFLOW_WRITE_SEC = 5.0   # throttle orderflow.json writes
+SETUP_CHECK_SEC = 5.0       # throttle snapshot re-reads
+
+
+def ws_path(universe) -> str:
+    """markPrice arr for everything + aggTrade/depth10 for universe symbols."""
+    streams = ["!markPrice@arr@1s"]
+    for s in universe or []:
+        sl = str(s).lower()
+        streams.append(f"{sl}@aggTrade")
+        streams.append(f"{sl}@depth10@100ms")
+    return "/stream?streams=" + "/".join(streams)
 
 
 def log(msg: str) -> None:
@@ -85,7 +98,8 @@ class WsError(Exception):
 class MarkPriceWs:
     """Minimal RFC6455 client for Binance futures combined streams."""
 
-    def __init__(self, host: str = WS_HOST, path: str = WS_PATH, timeout: int = 15):
+    def __init__(self, host: str = WS_HOST,
+                 path: str = "/stream?streams=!markPrice@arr@1s", timeout: int = 15):
         self.host, self.path, self.timeout = host, path, timeout
         self.sock = None
 
@@ -172,7 +186,7 @@ def rest_prices() -> dict:
 
 
 def latest_setups() -> tuple:
-    """(mtime, setups) from the newest scanner snapshot."""
+    """(mtime, setups, universe) from the newest scanner snapshot."""
     try:
         mtime = SNAPSHOTS.stat().st_mtime
         with SNAPSHOTS.open("r", encoding="utf-8") as f:
@@ -184,9 +198,10 @@ def latest_setups() -> tuple:
                 snap = json.loads(line)
                 break
     except Exception:
-        return 0.0, []
+        return 0.0, [], []
     if not snap:
-        return 0.0, []
+        return 0.0, [], []
+    universe = snap.get("universe") or []
     setups = []
     for profile, rows in (snap.get("profiles") or {}).items():
         for t in rows or []:
@@ -205,7 +220,7 @@ def latest_setups() -> tuple:
                     "risk_usd": t.get("risk_usd"),
                     "quantity": t.get("quantity"),
                 })
-    return mtime, setups
+    return mtime, setups, universe
 
 
 def load_state() -> dict:
@@ -292,19 +307,30 @@ def run() -> None:
     REPORTS.mkdir(parents=True, exist_ok=True)
     log("K3 live engine starting")
     state = load_state()
+    tracker = OrderflowTracker()
     prices: dict = {}
-    snap_mtime, setups = 0.0, []
+    snap_mtime, setups, universe = 0.0, [], []
     last_write, last_msg = 0.0, time.time()
+    last_setup_check, last_of_write = 0.0, 0.0
     ws_fails, mode, last_ws_try = 0, "ws", 0.0
     ws = None
 
     while True:
         try:
             # refresh setup list when the scanner writes a new snapshot
-            m, new_setups = latest_setups()
-            if m != snap_mtime:
-                snap_mtime, setups = m, new_setups
-                log(f"setups loaded: {len(setups)} from snapshot")
+            now0 = time.time()
+            if now0 - last_setup_check >= SETUP_CHECK_SEC:
+                last_setup_check = now0
+                m, new_setups, new_universe = latest_setups()
+                if m != snap_mtime:
+                    snap_mtime, setups = m, new_setups
+                    log(f"setups loaded: {len(setups)} from snapshot")
+                    if new_universe and new_universe != universe:
+                        universe = new_universe
+                        log(f"universe updated: {len(universe)} symbols — reconnecting streams")
+                        if ws:
+                            ws.close()
+                            ws = None
 
             if mode == "rest":
                 prices = rest_prices()
@@ -315,23 +341,42 @@ def run() -> None:
                     continue
             else:
                 if ws is None:
-                    ws = MarkPriceWs()
+                    ws = MarkPriceWs(path=ws_path(universe))
                     ws.connect()
                     ws.sock.settimeout(HEARTBEAT_SEC)
                     last_msg = time.time()
-                    log("websocket connected (!markPrice@arr@1s)")
+                    log(f"websocket connected ({1 + 2 * len(universe)} streams)")
                 msg = ws.recv_text()
                 last_msg = time.time()
-                payload = json.loads(msg).get("data") or []
-                # the arr stream alternates full-crypto and stock-index chunks;
+                frame = json.loads(msg)
+                stream = frame.get("stream") or ""
+                data = frame.get("data")
+                if stream.endswith("@aggTrade"):
+                    tracker.on_agg_trade(data.get("s"), data)
+                    ws_fails = 0
+                    continue
+                if "@depth" in stream:
+                    tracker.on_depth(data.get("s"), data)
+                    ws_fails = 0
+                    continue
+                # mark price arr: alternates full-crypto / stock-index chunks;
                 # merge so one chunk never wipes the other's symbols
+                payload = data or []
                 prices.update({row["s"]: float(row["p"]) for row in payload if "p" in row})
                 ws_fails = 0
+
+            now = time.time()
+            if now - last_of_write >= ORDERFLOW_WRITE_SEC and tracker.symbols:
+                last_of_write = now
+                _atomic_write_json(ORDERFLOW_OUT, {
+                    "ts": now,
+                    "utc": datetime.now(timezone.utc).isoformat(),
+                    "symbols": tracker.snapshot(),
+                })
 
             if not prices:
                 continue
 
-            now = time.time()
             if now - last_write >= PRICE_WRITE_MIN_SEC:
                 _atomic_write_json(PRICES_OUT, {
                     "ts": now,

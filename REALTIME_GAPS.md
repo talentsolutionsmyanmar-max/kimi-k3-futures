@@ -18,11 +18,16 @@ of any touch.
 - *Remaining:* kline streams for intra-bar signal regeneration (structure still forms
   on closed bars only — by design).
 
-## Gap 2 — No order book / footprint  (OPEN)
-Scalpers live on depth, spread, and delta. K3's order-flow read is the per-bar
-`taker_buy/volume` ratio only — aggregated, no level-2.
-- *To close:* subscribe `depth20@100ms` + `aggTrade` websockets; add a real
-  cumulative-delta group to the fusion. Public, no keys needed, but requires Gap 1 first.
+## Gap 2 — No order book / footprint  (CLOSED — order-flow overlay)
+`k3/orderflow.py` consumes `<sym>@aggTrade` and `<sym>@depth10@100ms` streams (21
+streams on the live engine's single socket) for every universe symbol and maintains:
+rolling **CVD** (1m/5m, quote USDT), a per-symbol **delta z-score** (1m delta vs its
+own 10-min history), and an EMA-smoothed **top-10 book imbalance**. Published to
+`reports/orderflow.json` every 5s. The scanner applies it as a **live-only overlay**
+(±5 max on the K3 score: delta-z ×1.5 + imbalance ×4, direction-signed), notes it on
+the ticket, and the board renders an ORDER FLOW chip row (adj / Δz / book / CVD / prints).
+Backtests are deliberately untouched — there is no order-flow history to replay.
+- *Remaining:* true level-2 footprint / cumulative-delta charting; absorption detection.
 
 ## Gap 3 — OI delta endpoint intermittent  (OPEN, fail-open)
 `/futures/data/openInterestHist` returns nothing from some networks/regions, so
@@ -59,6 +64,7 @@ condition runs every 1 minute, so an Entry/SL/TP touch reaches the desktop withi
 | Tick-level mark prices | Live now — websocket engine, 1s cadence, launchd-persistent |
 | Entry / SL / TP touch alerts | Live now — ~1 min to desktop via alarm task |
 | Kill zones / session discipline | Live now |
+| Order flow (CVD, delta-z, book imbalance) | Live now — 21-stream socket, ±5 score overlay |
 | Intra-bar signal regeneration | Closed bars only (by design) |
 | Order book depth | Not built |
 | Historical positioning in research | Accrues automatically from the dashboard job |
