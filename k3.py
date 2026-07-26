@@ -138,6 +138,14 @@ def cmd_research(a) -> None:
     print(f"\nreport: {path}")
 
 
+def cmd_replay(a) -> None:
+    from k3.replay import replay, print_report
+    res = replay(window_min=a.window_min)
+    print_report(res)
+    path = _save(f"k3_replay_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+    print(f"\nreport: {path}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="KIMI K3 futures system")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -162,6 +170,10 @@ def main() -> None:
     p.add_argument("--symbols", nargs="*", default=None)
     p.add_argument("--limit", type=int, default=1500)
     p.set_defaults(fn=cmd_research)
+
+    p = sub.add_parser("replay")
+    p.add_argument("--window-min", type=int, default=12)
+    p.set_defaults(fn=cmd_replay)
 
     args = ap.parse_args()
     try:

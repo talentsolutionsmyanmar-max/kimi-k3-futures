@@ -35,12 +35,16 @@ Backtests are deliberately untouched — there is no order-flow history to repla
 but the positioning group is then funding-z + taker flow only.
 - *To close:* run from a region where the endpoint is served, or proxy.
 
-## Gap 4 — Positioning history absent in backtests  (OPEN)
-Funding history and OI history are available "recent-only" from the API. Backtests score
-the positioning group from taker flow only; live scans use the full overlay. So backtest
-P&L *understates* what the live engine sees — the live system is strictly smarter.
-- *To close:* persist funding/OI snapshots to SQLite on every scheduled run;
-  after 4–8 weeks, backtests replay real positioning history. The dashboard job does this.
+## Gap 4 — Positioning history absent in backtests  (CLOSING — replay harness live)
+The scanner now accrues **both** histories on every 15-min run:
+`live_snapshots.jsonl` (full artifacts incl. funding/positioning) and
+`orderflow_history.jsonl` (compact CVD / delta-z / imbalance records).
+`k3/replay.py` (`python3 k3.py replay`) joins them and validates the order-flow
+overlay against forward r_now drift — coverage %, agreement/disagreement hit
+rates, and an honest verdict once samples ≥10 per side. Early runs correctly
+report "insufficient data"; the verdict sharpens every week the engine runs.
+- *Remaining:* replaying positioning history *inside* the bar-level backtest
+  engine (currently the replay works at snapshot granularity, 15 min).
 
 ## Gap 5 — No execution layer  (BY DESIGN)
 K3 emits setups, not orders. Slippage/fees are modeled (0.04–0.05% + 0.02%), funding drag
