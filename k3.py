@@ -146,11 +146,36 @@ def cmd_replay(a) -> None:
     print(f"\nreport: {path}")
 
 
+def cmd_universe(a) -> None:
+    from k3.screener import screen, print_report
+    res = screen(top_n=a.top)
+    uni = discover_top10()
+    print_report(res, uni)
+    res["current_universe"] = uni
+    path = _save(f"k3_universe_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+    print(f"\nreport: {path}")
+
+
+def cmd_leaktest(a) -> None:
+    from k3.leaktest import leaktest, print_report
+    for name in _profiles(a.profile):
+        res = leaktest(get_profile(name), seeds=a.seeds, bars=a.bars)
+        print_report(res)
+        path = _save(f"k3_leaktest_{name}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+        print(f"report: {path}")
+        if not res["passed"]:
+            sys.exit(1)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="KIMI K3 futures system")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("top10"); p.set_defaults(fn=cmd_top10)
+
+    p = sub.add_parser("universe")
+    p.add_argument("--top", type=int, default=25)
+    p.set_defaults(fn=cmd_universe)
 
     p = sub.add_parser("scan")
     p.add_argument("--profile", default="both", choices=["scalp", "day", "both"])
@@ -174,6 +199,12 @@ def main() -> None:
     p = sub.add_parser("replay")
     p.add_argument("--window-min", type=int, default=12)
     p.set_defaults(fn=cmd_replay)
+
+    p = sub.add_parser("leaktest")
+    p.add_argument("--profile", default="both", choices=["scalp", "day", "both"])
+    p.add_argument("--seeds", type=int, default=8)
+    p.add_argument("--bars", type=int, default=1200)
+    p.set_defaults(fn=cmd_leaktest)
 
     args = ap.parse_args()
     try:

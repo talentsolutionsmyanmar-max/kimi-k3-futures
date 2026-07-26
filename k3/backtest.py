@@ -1,10 +1,16 @@
-"""K3 backtester — event-driven, funding-aware.
+"""K3 backtester — event-driven, funding-aware, look-ahead-free.
 
 Improvements over the lineage backtester:
   - entries sized by conviction (score risk multiplier)
   - funding cost charged on open notional every 8h of holding (perp reality)
   - WATCH-tier entries allowed at reduced risk (matches live engine)
   - per-trade K3 score logging so research mode can correlate score <-> outcome
+
+Fable5 audit hardening (2026-07):
+  - stops fill with ATR-scaled gap-through slippage (no exact-price miracles)
+  - SCALP entries gated to non-caution kill zones (live engine parity —
+    the live scanner demotes SCALP to WATCH outside kill zones)
+  - per-session P&L attribution (ASIA/LONDON/NEW_YORK/LONDON_CLOSE/NY_PM/NONE)
 """
 
 from __future__ import annotations
@@ -12,14 +18,34 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import pandas as pd
 
 from . import data
 from .config import Profile, TF_MINUTES
+from .killzones import active_zones
 from .risk import score_risk_multiplier
 from .signals import score_dataframe
 from .structure import build_structure
 
 FUNDING_INTERVAL_MIN = 480  # 8h
+STOP_GAP_ATR = 0.10         # stops fill 0.1x ATR through the stop (adverse)
+
+
+def _entry_session(ts) -> str:
+    try:
+        zones = active_zones(pd.Timestamp(ts).to_pydatetime())
+        return "+".join(z["name"] for z in zones) if zones else "NONE"
+    except Exception:
+        return "NONE"
+
+
+def _tradable_now(ts) -> bool:
+    """SCALP doctrine: entries only inside a non-caution kill zone."""
+    try:
+        zones = active_zones(pd.Timestamp(ts).to_pydatetime())
+        return bool(zones) and not any(z["caution"] for z in zones)
+    except Exception:
+        return False
 
 
 def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
@@ -42,6 +68,8 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
     o, h, l, c = df["open"].values, df["high"].values, df["low"].values, df["close"].values
     atr, dirs, scores, tiers = df["atr"].values, df["k3_dir"].values, df["k3_score"].values, df["k3_tier"].values
     times = df["timestamp"].astype(str).values
+    dts = pd.to_datetime(df["timestamp"], utc=True).values
+    kz_gate = p.name.upper() == "SCALP"   # live parity: SCALP is kill-zone-gated
 
     def fee(x: float) -> float:
         return abs(x) * (r.commission + r.slippage)
@@ -64,7 +92,8 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
 
             stopped = (side == 1 and l[i] <= stop) or (side == -1 and h[i] >= stop)
             if stopped:
-                exit_price, exit_reason = stop, "STOP"
+                # honest fill: stops gap through by 0.1x ATR adverse — no exact-price fills
+                exit_price, exit_reason = stop - side * STOP_GAP_ATR * a, "STOP"
             else:
                 for k, (rr, pct) in enumerate(zip(r.tp_r, r.tp_pct)):
                     if pos["tps"][k]:
@@ -106,25 +135,30 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
                     "pnl": round(pos["realized"], 2), "tps_hit": sum(pos["tps"]),
                     "funding_paid": round(pos["funding_paid"], 2),
                     "bars_held": pos["bars"],
+                    "session": pos.get("session", "NONE"),
                 })
                 pos = None
 
         if pos is None and int(dirs[i]) != 0 and str(tiers[i]) in enter_tiers and capital > 0:
-            side = int(dirs[i])
-            a = atr[i] if atr[i] > 0 else c[i] * 0.002
-            sd = r.atr_stop_mult * a
-            entry = o[i + 1] * (1 + side * r.slippage)
-            mult = score_risk_multiplier(float(scores[i]), p)
-            qty = (capital * r.risk_per_trade * mult) / sd
-            qty = min(qty, (capital * r.max_leverage) / entry)
-            capital -= fee(entry * qty)
-            pos = {
-                "side": side, "entry": entry, "stop_dist": sd, "entry_time": times[i + 1],
-                "qty0": qty, "qty_left": qty, "stop": entry - side * sd,
-                "tps": [False, False, False], "bars": 0, "trail": False,
-                "realized": -fee(entry * qty), "funding_paid": 0.0,
-                "score": float(scores[i]), "tier": str(tiers[i]),
-            }
+            if kz_gate and not _tradable_now(dts[i]):
+                pass  # SCALP: outside kill zone — no entry (live engine parity)
+            else:
+                side = int(dirs[i])
+                a = atr[i] if atr[i] > 0 else c[i] * 0.002
+                sd = r.atr_stop_mult * a
+                entry = o[i + 1] * (1 + side * r.slippage)
+                mult = score_risk_multiplier(float(scores[i]), p)
+                qty = (capital * r.risk_per_trade * mult) / sd
+                qty = min(qty, (capital * r.max_leverage) / entry)
+                capital -= fee(entry * qty)
+                pos = {
+                    "side": side, "entry": entry, "stop_dist": sd, "entry_time": times[i + 1],
+                    "qty0": qty, "qty_left": qty, "stop": entry - side * sd,
+                    "tps": [False, False, False], "bars": 0, "trail": False,
+                    "realized": -fee(entry * qty), "funding_paid": 0.0,
+                    "score": float(scores[i]), "tier": str(tiers[i]),
+                    "session": _entry_session(dts[i]),
+                }
 
         mtm = 0.0 if pos is None else pos["side"] * (c[i] - pos["entry"]) * pos["qty_left"]
         equity.append(capital + mtm)
@@ -138,8 +172,10 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
     peak = np.maximum.accumulate(eq)
     max_dd = float(((peak - eq) / np.maximum(peak, 1e-9)).max())
     by_tier: Dict[str, List[float]] = {}
+    by_session: Dict[str, List[float]] = {}
     for t in trades:
         by_tier.setdefault(t["tier"], []).append(t["pnl"])
+        by_session.setdefault(t.get("session", "NONE"), []).append(t["pnl"])
 
     return {
         "symbol": sym, "profile": p.name, "timeframe": p.timeframe, "bars": len(df),
@@ -153,6 +189,8 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
         "avg_loss": round(float(losses.mean()), 2) if len(losses) else 0.0,
         "funding_paid_total": round(sum(t["funding_paid"] for t in trades), 2),
         "pnl_by_tier": {k: round(float(np.sum(v)), 2) for k, v in by_tier.items()},
+        "pnl_by_session": {k: round(float(np.sum(v)), 2) for k, v in sorted(by_session.items())},
+        "trades_by_session": {k: len(v) for k, v in sorted(by_session.items())},
         "final_capital": round(capital, 2),
         "trade_log": trades[-30:],
     }

@@ -30,7 +30,7 @@ class RiskKernel:
     risk_per_trade: float = 0.01
     atr_period: int = 14
     atr_stop_mult: float = 1.8
-    commission: float = 0.0004
+    commission: float = 0.00055        # honest taker (Fable5 audit: real is 0.05–0.055%)
     slippage: float = 0.0002
     max_leverage: float = 20.0
     # scale-out ladder
@@ -104,7 +104,7 @@ SCALP = Profile(
         tp_pct=[0.50, 0.30, 0.20],
         trail_atr_mult=0.8,
         max_hold_bars=24,
-        commission=0.0005,
+        commission=0.00055,
         max_leverage=25.0,
         max_concurrent=3,
     ),

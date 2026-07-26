@@ -21,6 +21,14 @@ from .data import wilder_atr
 
 
 def _swings(df: pd.DataFrame, left: int, right: int) -> pd.DataFrame:
+    """Swing highs/lows with confirmation delay.
+
+    A swing at bar i needs `right` future bars to confirm — so the LEVEL only
+    becomes knowable at bar i+right. We therefore ffill from the swing bar and
+    then shift by `right`: no level is ever visible before its confirmation.
+    (Fable5 audit Leak 2: previously levels were live from the swing bar itself,
+    i.e. 2 bars early — look-ahead.)
+    """
     df = df.copy()
     h, l = df["high"], df["low"]
     sh = pd.Series(True, index=df.index)
@@ -33,8 +41,8 @@ def _swings(df: pd.DataFrame, left: int, right: int) -> pd.DataFrame:
         sl &= l < l.shift(-k)
     df["swing_high"] = sh.fillna(False)
     df["swing_low"] = sl.fillna(False)
-    df["last_swing_high"] = pd.Series(np.where(df["swing_high"], h, np.nan), index=df.index).ffill()
-    df["last_swing_low"] = pd.Series(np.where(df["swing_low"], l, np.nan), index=df.index).ffill()
+    df["last_swing_high"] = pd.Series(np.where(df["swing_high"], h, np.nan), index=df.index).ffill().shift(right)
+    df["last_swing_low"] = pd.Series(np.where(df["swing_low"], l, np.nan), index=df.index).ffill().shift(right)
     return df
 
 
@@ -85,18 +93,25 @@ def _displacement(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fvg(df: pd.DataFrame, p: Profile) -> pd.DataFrame:
+    """Fair value gaps — ICT 3-candle convention, flagged at candle 3 close.
+
+    Bull FVG: low[t] > high[t-2] — the gap between candle t-2's high and
+    candle t's low is knowable only when candle t CLOSES. Flagging at t with
+    shift(+past) is causal; the previous version flagged at t-2 using
+    shift(-2), i.e. two bars into the future (Fable5 audit Leak 1).
+    """
     df = df.copy()
-    gap_up = df["low"].shift(-2) - df["high"]       # bull FVG between t and t+2
-    gap_dn = df["low"] - df["high"].shift(-2)       # bear FVG
+    gap_up = df["low"] - df["high"].shift(2)        # bull FVG, confirmed at t
+    gap_dn = df["low"].shift(2) - df["high"]        # bear FVG, confirmed at t
     if p.fvg_method == "adaptive":
         min_gap = wilder_atr(df, 14) * float(p.fvg_min_atr)
     else:
         min_gap = df["close"] * float(p.fvg_min_pct)
     df["fvg_bull"] = (gap_up > min_gap).fillna(False)
     df["fvg_bear"] = (gap_dn > min_gap).fillna(False)
-    # unfilled FVG zones still open at each bar (price hasn't re-entered)
-    df["fvg_bull_zone_bot"] = np.where(df["fvg_bull"], df["high"], np.nan)
-    df["fvg_bear_zone_top"] = np.where(df["fvg_bear"], df["low"], np.nan)
+    # zone bounds: bull zone sits between high[t-2] (bottom) and low[t] (top)
+    df["fvg_bull_zone_bot"] = np.where(df["fvg_bull"], df["high"].shift(2), np.nan)
+    df["fvg_bear_zone_top"] = np.where(df["fvg_bear"], df["low"].shift(2), np.nan)
     return df
 
 

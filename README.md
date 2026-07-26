@@ -19,6 +19,8 @@ Lineage: it absorbs the DNA of
 | **Tiered decisions** — ACTIVE / WATCH / STANDBY + conviction-scaled risk (0.75x / 1.0x / 1.25x) | Position size follows evidence, not hope |
 | **Funding-aware backtester** — 8h funding drag, signal-flip early exit, per-tier P&L attribution | Backtests that behave like real perp trading |
 | **Walk-forward research mode** — train 60% / OOS 40% with a train-gate | Kills parameter combos that only look good in-sample |
+| **Look-ahead regression harness** — `leaktest` must lose on random walks | Any backtest number that can't survive this is not shipped |
+| **Universe screener** — 75+ perps ranked by range / tape / drift / funding, not just volume | Finds game-changer pairs the volume top-10 misses; candidates are backtested before promotion |
 
 ## Run it
 
@@ -26,9 +28,12 @@ Lineage: it absorbs the DNA of
 pip install -r requirements.txt
 
 python k3.py top10                              # live top-10 futures universe
+python k3.py universe                           # game-changer screener (all USDT-M perps)
 python k3.py scan --profile both                # live setups, both profiles
 python k3.py backtest --profile day --limit 1500
 python k3.py research --profile scalp           # walk-forward validation
+python k3.py leaktest                           # random-walk look-ahead regression (must lose)
+python k3.py replay                             # order-flow overlay validation (accruing)
 python k3.py scan --symbols BTCUSDT SOLUSDT --capital 25000 --profile day
 ```
 
@@ -46,21 +51,31 @@ python k3.py scan --symbols BTCUSDT SOLUSDT --capital 25000 --profile day
 Tiers are **empirically calibrated**: on the majors the K3 composite's q95 ≈ 50–52 and
 q99 ≈ 61–63, so ACTIVE fires on roughly the top 1% of bars — selective by construction.
 
-## Validation results (2026-07-26, live Binance data, $10k, fees+slippage+funding)
+## Validation results — the honest baseline (2026-07-26, post Fable5 audit)
 
-**DAY profile — 1200 bars × 10 symbols: 248 trades, 65.9% win, +$2,942 net** (avg +2.95%/symbol).
-Best: DEXEU +$794 (PF 1.94), BANK +$675 (PF 2.34). Weakest: BTC −$319.
+**⚠ The earlier DAY claim (+$2,942, 65.9% win) was retracted.** A Fable5 audit found two
+look-ahead leaks in `structure.py` (FVG flagged 2 bars into the future via `shift(-2)`;
+swing levels visible before their 2-bar confirmation). The audit's random-walk test proved
+the old engine profited on coin flips (+$1,578 on 8 seeds) — the classic signature of
+look-ahead bias. Both leaks are now fixed (causal 3-candle FVG, confirmation-delayed
+swings), and the random-walk regression test (`python3 k3.py leaktest`) is permanent:
+**post-fix the engine loses on all random-walk seeds, as a correct backtester must.**
 
-**SCALP profile — honest failure, documented on purpose.** Raw backtest: −$3,650
-(BTC alone −$3,964 at 11% win rate). Walk-forward research (60 parameter combos/symbol,
-train-gated then tested OOS): **no combo survived out-of-sample** (OOS PF 0.12–0.36).
-Conclusion: the 5m stack is *not validated* in this market window; K3 ships it as
-experimental and will not pretend otherwise. That refusal is the Fable5 provenance
-doctrine working as intended.
+**True DAY baseline (leak-free, honest costs 0.055% taker + ATR stop-gap slippage,
+1500 bars × 10 symbols, $10k, funding):** 508 trades, 51.3% win, **−$7,056 net**.
+ACTIVE-tier-only variant: 126 trades, 49.1% win, −$3,253. On this 15-day single-regime
+sample the leak-free DAY stack does **not** beat costs — that is the true starting point,
+and every future improvement is measured against it. Signal quality concentrates in the
+ACTIVE tier and per-session attribution (`pnl_by_session`) now shows where.
 
-**Live scan (16:52 UTC):** 4 WATCH setups — ESPORTS SHORT (structure −80, momentum −90,
-funding z −1.88 contrarian), ETH/SOL/DOGE LONGs aligned with HTF — with full entry/stop/
-3-TP plans. EULUSDT hard-blocked: funding 0.73% = extremely crowded.
+**SCALP profile — honest failure, still documented on purpose.** Raw backtest: −$3,650.
+Walk-forward research: **no combo survived out-of-sample**. Additionally, SCALP entries
+are now kill-zone-gated in the backtester for live-engine parity. Ships as experimental.
+
+**Doctrine:** K3 numbers are believable only because they are now *mechanically*
+verifiable — `leaktest` must pass, walk-forward gates research, and any claim that
+can't survive both is not shipped. That is the Fable5 provenance doctrine applied
+to K3 itself, not just its failures.
 
 ## Architecture
 
@@ -68,13 +83,18 @@ funding z −1.88 contrarian), ETH/SOL/DOGE LONGs aligned with HTF — with full
 k3/
   config.py     # risk kernel + SCALP/DAY profiles + fusion weights
   data.py       # Binance futures API: top10, klines(+taker flow), funding hist/z, OI, indicators
-  structure.py  # swings, BOS/CHoCH state machine, displacement, FVG, premium/discount, OTE, sweeps, OBs
+  structure.py  # swings (confirmation-delayed), BOS/CHoCH, displacement, causal FVG, PD, OTE, sweeps, OBs
   signals.py    # 5-group signed scorers + composite K3 score + tiers + positioning overlay
   risk.py       # conviction-scaled sizing, TP ladder, portfolio caps
   engine.py     # per-symbol setup builder (structure → fusion → gates → trade plan)
-  backtest.py   # funding-aware event-driven backtester, per-tier P&L
+  backtest.py   # leak-free event-driven backtester, KZ-gated SCALP, per-session P&L, honest costs
   research.py   # walk-forward grid validation with OOS honesty gate
-k3.py           # CLI: top10 | scan | backtest | research
+  killzones.py  # ICT kill-zone session clock (UTC)
+  livefeed.py   # 24/7 websocket engine: 1s marks, Entry/SL/TP touches, 21 streams
+  orderflow.py  # CVD, delta z-score, book imbalance from aggTrade + depth10
+  replay.py     # order-flow overlay validation against accrued history
+  leaktest.py   # random-walk look-ahead regression test (must lose on coin flips)
+k3.py           # CLI: top10 | universe | scan | backtest | research | leaktest | replay
 reports/        # JSON artifacts of every run
 ```
 
