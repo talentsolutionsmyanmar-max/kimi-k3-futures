@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-from .config import FAPI, FALLBACK_TOP10, STABLE_LIKE
+from .config import FAPI, FALLBACK_TOP10, STABLE_LIKE, TF_MINUTES
 
 _cache: Dict[str, Tuple[float, Any]] = {}
 _lock = threading.Lock()
@@ -77,6 +77,40 @@ def klines(symbol: str, interval: str, limit: int = 500) -> pd.DataFrame:
         "volume": [float(r[5]) for r in rows],
         "taker_buy": [float(r[9]) for r in rows],       # taker buy base volume
     })
+
+
+def klines_history(symbol: str, interval: str, bars: int = 6000) -> pd.DataFrame:
+    """Paginated klines going backward until `bars` rows (validity study needs
+    >= 5,000 bars per symbol — one /klines call caps at 1500)."""
+    tf_ms = TF_MINUTES.get(interval, 15) * 60_000
+    out: List[pd.DataFrame] = []
+    end = None
+    got = 0
+    while got < bars:
+        params: dict = {"symbol": symbol.upper(), "interval": interval, "limit": 1500}
+        if end is not None:
+            params["endTime"] = end
+        rows = _get("/klines", params)
+        if not isinstance(rows, list) or not rows:
+            break
+        chunk = pd.DataFrame({
+            "timestamp": pd.to_datetime([r[0] for r in rows], unit="ms", utc=True),
+            "open": [float(r[1]) for r in rows],
+            "high": [float(r[2]) for r in rows],
+            "low": [float(r[3]) for r in rows],
+            "close": [float(r[4]) for r in rows],
+            "volume": [float(r[5]) for r in rows],
+            "taker_buy": [float(r[9]) for r in rows],
+        })
+        out.append(chunk)
+        got += len(chunk)
+        end = int(rows[0][0]) - tf_ms
+        if len(rows) < 1500:
+            break
+    if not out:
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume", "taker_buy"])
+    df = pd.concat(out).drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
+    return df.tail(bars).reset_index(drop=True)
 
 
 def quote_volume_24h(symbol: str, ttl: float = 60.0) -> float:

@@ -178,6 +178,31 @@ def cmd_causaltest(a) -> None:
             sys.exit(1)
 
 
+def cmd_validity(a) -> None:
+    from k3.validity import SAMPLE, print_report, validity
+    symbols = [s.upper() for s in a.symbols] if a.symbols else SAMPLE
+    for name in _profiles(a.profile):
+        p = get_profile(name)
+        print(f"\n>>> K3 signal validity study | {p.name} {p.timeframe} | "
+              f"{len(symbols)} symbols x {a.bars} bars — this fetches a lot of history")
+        res = validity(symbols, p, bars=a.bars)
+        print_report(res)
+        path = _save(f"k3_validity_{p.name}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+        print(f"\nreport: {path}")
+
+
+def cmd_ledger(a) -> None:
+    from k3.ledger import run, print_report
+    symbols = [s.upper() for s in a.symbols] if a.symbols else discover_top10()
+    for name in _profiles(a.profile):
+        p = get_profile(name)
+        print(f"\n>>> K3 exit-event ledger | {p.name} {p.timeframe} | {len(symbols)} symbols")
+        res = run(symbols, p, limit=a.limit, iters=a.bootstrap)
+        print_report(res)
+        path = _save(f"k3_ledger_{p.name}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+        print(f"\nreport: {path}")
+
+
 def cmd_scalp2(a) -> None:
     from k3.scalp2 import MAJORS5, compare, print_compare
     symbols = [s.upper() for s in a.symbols] if a.symbols else MAJORS5
@@ -277,6 +302,19 @@ def main() -> None:
     p.add_argument("--ote", type=float, default=0.705)
     p.add_argument("--cancel-bars", type=int, default=12)
     p.set_defaults(fn=cmd_scalp2)
+
+    p = sub.add_parser("ledger")
+    p.add_argument("--profile", default="both", choices=["scalp", "day", "both"])
+    p.add_argument("--symbols", nargs="*", default=None)
+    p.add_argument("--limit", type=int, default=1500)
+    p.add_argument("--bootstrap", type=int, default=1000)
+    p.set_defaults(fn=cmd_ledger)
+
+    p = sub.add_parser("validity")
+    p.add_argument("--profile", default="both", choices=["scalp", "day", "both"])
+    p.add_argument("--symbols", nargs="*", default=None)
+    p.add_argument("--bars", type=int, default=6000)
+    p.set_defaults(fn=cmd_validity)
 
     args = ap.parse_args()
     try:

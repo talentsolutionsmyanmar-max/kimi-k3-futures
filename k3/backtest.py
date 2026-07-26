@@ -50,9 +50,14 @@ def _tradable_now(ts) -> bool:
 
 def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
                     df: Optional[Any] = None, enter_tiers=("ACTIVE", "WATCH"),
-                    start_bar: int = 80) -> Dict[str, Any]:
+                    start_bar: int = 80,
+                    ledger: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     # start_bar: begin the trade loop here (signals are still computed on the
     # full history) — used for honest out-of-sample slices in tier calibration.
+    # ledger: when a list is passed, every position state transition (TP1/TP2/
+    # TP3/STOP/TIME_EXIT/SIGNAL_FLIP/TP_LADDER_DONE) appends an event row with
+    # the entry snapshot and causal MFE/MAE in R (Fable5 Phase 7). Measurement
+    # only — no behavior changes.
     sym = symbol.upper().replace("/", "")
     r = p.risk
     if df is None:
@@ -73,6 +78,34 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
     times = df["timestamp"].astype(str).values
     dts = pd.to_datetime(df["timestamp"], utc=True).values
     kz_gate = p.name.upper() == "SCALP"   # live parity: SCALP is kill-zone-gated
+
+    # ---- Phase 7 ledger: optional per-bar snapshot columns (attached by ledger.py) ----
+    def _col(name: str, default: float = np.nan) -> Any:
+        return df[name].values if name in df.columns else np.full(len(df), default)
+
+    snap_cols = {k: _col(k) for k in (
+        "g_structure", "g_liquidity", "g_momentum", "g_volatility", "g_positioning",
+        "struct_state", "ctx_state", "funding_rate", "funding_z", "oi_delta", "quote_vol_24h")}
+
+    def emit(i: int, ev_type: str, price: float, part: float) -> None:
+        """Append one transition event. Price-R is pre-fee; MFE/MAE are causal
+        (entry bar forward only, stop-first convention on spanning bars)."""
+        if ledger is None or pos is None:
+            return
+        sd = pos["stop_dist"]
+        pos["r_cum"] += pos["side"] * (price - pos["entry"]) * part / (sd * pos["qty0"])
+        snap = {"symbol": sym, "profile": p.name, "side": "LONG" if pos["side"] == 1 else "SHORT",
+                "entry_bar": pos["entry_bar"], "entry_time": pos["entry_time"],
+                "event_bar": i, "event_time": times[i], "event": ev_type,
+                "price": round(float(price), 8), "bars_since_entry": pos["bars"],
+                "qty_frac": round(part / pos["qty0"], 4) if pos["qty0"] else 0.0,
+                "r_realized_cum": round(pos["r_cum"], 4),
+                "mfe_r": round(pos["mfe"] / sd, 3), "mae_r": round(pos["mae"] / sd, 3),
+                "tier": pos["tier"], "k3_score": pos["score"], "killzone": pos.get("session", "NONE"),
+                "entry": round(float(pos["entry"]), 8), "stop": round(float(pos["stop"]), 8),
+                "atr": round(float(pos["entry_atr"]), 8), "stop_bps": round(sd / pos["entry"] * 1e4, 1)}
+        snap.update(pos["snap"])
+        ledger.append(snap)
 
     def fee(x: float) -> float:
         return abs(x) * (r.commission + r.slippage)
@@ -97,7 +130,17 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
             if stopped:
                 # honest fill: stops gap through by 0.1x ATR adverse — no exact-price fills
                 exit_price, exit_reason = stop - side * STOP_GAP_ATR * a, "STOP"
+                # ledger convention: on the stop bar the intrabar path is unknown, so
+                # the bar's favorable extreme is NOT credited to MFE; MAE absorbs the stop.
+                pos["mae"] = min(pos["mae"], side * (exit_price - entry))
             else:
+                # favorable/adverse excursion — direction-aware bar extremes
+                if side == 1:
+                    pos["mfe"] = max(pos["mfe"], h[i] - entry)
+                    pos["mae"] = min(pos["mae"], l[i] - entry)
+                else:
+                    pos["mfe"] = max(pos["mfe"], entry - l[i])
+                    pos["mae"] = min(pos["mae"], entry - h[i])
                 for k, (rr, pct) in enumerate(zip(r.tp_r, r.tp_pct)):
                     if pos["tps"][k]:
                         continue
@@ -109,6 +152,7 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
                         capital += pnl
                         pos["realized"] += pnl
                         pos["qty_left"] -= part
+                        emit(i, f"TP{k + 1}", tp, part)
                         if k == 0 and r.trail_after_tp1:
                             pos["trail"] = True
                         if pos["qty_left"] <= 1e-12:
@@ -124,6 +168,7 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
                     exit_price, exit_reason = c[i], "SIGNAL_FLIP"
 
             if exit_price is not None and pos["qty_left"] > 1e-12:
+                emit(i, exit_reason, exit_price, pos["qty_left"])
                 pnl = side * (exit_price - entry) * pos["qty_left"] - fee(exit_price * pos["qty_left"])
                 capital += pnl
                 pos["realized"] += pnl
@@ -161,6 +206,11 @@ def backtest_symbol(symbol: str, p: Profile, limit: int = 1500,
                     "realized": -fee(entry * qty), "funding_paid": 0.0,
                     "score": float(scores[i]), "tier": str(tiers[i]),
                     "session": _entry_session(dts[i]),
+                    # Phase 7 ledger state: entry snapshot at the decision bar + trackers
+                    "entry_bar": i + 1, "entry_atr": float(a),
+                    "mfe": 0.0, "mae": 0.0, "r_cum": 0.0,
+                    "snap": {k: (round(float(v[i]), 4) if np.isfinite(v[i]) else None)
+                             for k, v in snap_cols.items()},
                 }
 
         mtm = 0.0 if pos is None else pos["side"] * (c[i] - pos["entry"]) * pos["qty_left"]

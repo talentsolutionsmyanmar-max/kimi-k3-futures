@@ -37,6 +37,8 @@ python k3.py causaltest                         # causal truncation test: output
 python k3.py groupstudy --profile both          # per-group rank IC vs forward returns — does the fusion have edge at all?
 python k3.py tiercal --profile both             # tier recalibration: train 60% thresholds, OOS 40% verdict
 python k3.py scalp2                             # Phase 5: OTE limit-entry mechanics vs market-entry baseline
+python k3.py ledger --profile both              # Phase 7: exit-event ledger — MFE/MAE, conversions, dumb baseline, conditional-MFE test
+python k3.py validity --profile both            # Phase 6: pre-registered IC protocol (5k+ bars, bootstrap null, BH-FDR, OOS, regimes)
 python k3.py replay                             # order-flow overlay validation (accruing)
 python k3.py scan --symbols BTCUSDT SOLUSDT --capital 25000 --profile day
 ```
@@ -138,13 +140,68 @@ The mechanics work as designed — 10× selectivity, 90% less bleeding — but s
 mechanics are validated as *cost control*, not as an edge. SCALP remains experimental
 and the dashboard continues to demote it outside kill zones.
 
+## Phase 6 — signal validity study (2026-07-27, pre-registered protocol)
+
+`python3 k3.py validity` — the rigorous prior question: **do any of the five fusion
+groups predict forward returns at all?** 8 symbols × 6,000 bars × horizons 1/4/8/24,
+non-overlapping Spearman IC (primary), Newey-West t (secondary), circular block
+bootstrap null (1,000 iters), Benjamini-Hochberg FDR q=0.10 across the 160-cell grid,
+chronological 60/40 OOS, regime breakdown. Pre-registered rule: VALIDATED needs
+sign stability + FDR survival + OOS consistency + **economic materiality** (median
+quintile spread ≥ 1.5× the 11 bps cost floor).
+
+**Headline: the composite is FALSIFIED on both profiles. No group is VALIDATED.**
+
+| Group | DAY mean IC | DAY verdict | SCALP mean IC | SCALP verdict |
+|---|---|---|---|---|
+| Structure | −0.028 | CONDITIONAL | −0.054 | CONDITIONAL |
+| Liquidity | **+0.034** (94% symbols positive) | CONDITIONAL | +0.030 | CONDITIONAL |
+| Momentum | −0.065 (**inverted**, 17/32 FDR cells) | CONDITIONAL | −0.068 (inverted) | CONDITIONAL |
+| Volatility | −0.049 | CONDITIONAL | −0.044 | CONDITIONAL |
+| Positioning | −0.023 | CONDITIONAL | −0.026 | CONDITIONAL |
+| **Composite** | +0.016, 0/32 FDR, OOS flips | **FALSIFIED** | −0.004, 0/32 FDR | **FALSIFIED** |
+
+The binding constraint is economic, exactly as the brief predicted — *"an IC of 0.02
+is real and worthless"*: momentum's inversion is statistically robust (sign-stable on
+8/8 symbols, FDR-surviving) yet its median quintile spread is **5.0 bps DAY / 1.4 bps
+SCALP against an 11 bps cost floor**. Detectable, but practically dead. Regime read:
+liquidity is positive in all three DAY regimes (strongest in bear, +0.082); momentum's
+inversion deepens in bear regimes (−0.175). Per the protocol, **strategy-layer work
+stays frozen**: no reweighting, tier changes, or ladder redesign until a group
+validates. The live open hypotheses are structural — execution (maker fills at OTE/OB)
+and session conditioning (killzone-restricted samples) — not the fusion score.
+
+## Phase 7 — exit-event ledger (2026-07-27, measurement only)
+
+`python3 k3.py ledger` — `backtest.py` now emits a row at every position transition
+(TP1/TP2/TP3/STOP/TIME_EXIT/SIGNAL_FLIP) with the separated group scores, tier, bias,
+killzone, ATR, stop bps, funding rate/z, and causal MFE/MAE in R (entry bar forward,
+stop-first convention on spanning bars — documented in `k3/ledger.py`). Findings:
+
+- **A. MFE vs ladder:** DAY median MFE **1.02R** (p75 1.57R, p90 2.56R) vs ladder
+  1/2/3R — TP2/TP3 sit beyond what the median trade ever reaches; SCALP median 0.86R.
+- **B. MAE on winners:** winners' median dip only −0.36R; 11% threaten −0.8R —
+  **stop width is not the binding issue** on either profile.
+- **C. TP conversion:** DAY TP1→TP2 **28.5%** (below the ~30% dead-zone line — the
+  runner pays volatility for nothing); SCALP 51%.
+- **D. Dumb baseline:** flat 1R target on the same entries: DAY −$7,136 vs ladder
+  −$7,104 (**statistically indistinguishable — the ladder adds nothing on DAY**);
+  SCALP −$26,496 vs ladder −$17,020 (ladder genuinely helps on SCALP).
+- **E. Conditional MFE (1,000-iter bootstrap null):** DAY ACTIVE entries sit at the
+  **100th percentile** of matched random entries (median 1.06R vs null 0.50R);
+  SCALP 70th — no separation. Caveat honored: MFE is direction-agnostic and can
+  reflect regime conditioning rather than directional skill — which is exactly what
+  the Phase 6 composite falsification suggests is happening.
+
+No parameter was changed as a result of any of this. Measurement only.
+
 
 ## Architecture
 
 ```
 k3/
   config.py     # risk kernel + SCALP/DAY profiles + fusion weights
-  data.py       # Binance futures API: top10, klines(+taker flow), funding hist/z, OI, indicators
+  data.py       # Binance futures API: top10, klines(+taker flow), klines_history (paginated 5k+ bars), funding hist/z, OI, indicators
   structure.py  # swings (confirmation-delayed), BOS/CHoCH, displacement, causal FVG, PD, OTE, sweeps, OBs
   signals.py    # 5-group signed scorers + composite K3 score + tiers + positioning overlay
   risk.py       # conviction-scaled sizing, TP ladder, portfolio caps
@@ -160,8 +217,10 @@ k3/
   groupstudy.py # per-group rank IC vs forward returns — edge measurement, not fitting
   tiercal.py    # train-only tier thresholds with breadth-gated OOS adoption verdict
   scalp2.py     # Phase 5: OTE limit-entry / maker-fee mechanics + baseline comparison
+  ledger.py     # Phase 7: exit-event ledger — MFE/MAE, TP conversion, dumb baseline, conditional-MFE test
+  validity.py   # Phase 6: pre-registered IC protocol (bootstrap null, BH-FDR, OOS, regimes)
   screener.py   # all-perp universe screener (range / tape / drift / funding ranks)
-k3.py           # CLI: top10 | universe | scan | backtest | research | leaktest | causaltest | groupstudy | tiercal | scalp2 | replay
+k3.py           # CLI: top10 | universe | scan | backtest | research | leaktest | causaltest | groupstudy | tiercal | scalp2 | ledger | validity | replay
 reports/        # JSON artifacts of every run
 ```
 
