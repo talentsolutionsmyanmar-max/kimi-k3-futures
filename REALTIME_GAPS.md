@@ -1,15 +1,22 @@
 # K3 vs True Real-Time — Honest Gap Analysis
 
-What exists today, what the dashboard closes, and what remains open. No marketing.
+What exists today, what the dashboard + live engine close, and what remains open. No marketing.
 
-## Gap 1 — REST polling, not tick streaming  (PARTIALLY CLOSED)
-K3 reads Binance REST klines. The dashboard refreshes every 15 min at
-`:03/:18/:33/:48` — i.e. 2–3 min after each 15m bar close. Every closed 5m/15m bar is
-captured, so **no signal on a closed bar is ever missed**. What is missed: intra-bar
-information (a sweep that happens and reverts inside the current bar).
-- *To fully close:* persistent websocket consumer (`fstream.binance.com/ws`, kline streams
-  per symbol) with a small event loop. Blueprint runs are time-bounded, so this belongs
-  on a VPS or a `launchd`/`systemd` service, not in the scheduled job.
+## Gap 1 — REST polling, not tick streaming  (CLOSED — live engine)
+K3 reads Binance REST klines for signals (closed-bar doctrine: no signal on a closed bar
+is ever missed). Intra-bar level tracking is now handled by **`k3/livefeed.py`, the K3
+live engine**: a dependency-free websocket consumer on
+`fstream.binancefuture.com/stream?streams=!markPrice@arr@1s` (1s ticks, all symbols,
+with REST `premiumIndex` fallback). It runs 24/7 as a launchd service
+(`launchd/com.kimi.k3.livefeed.plist`), writes `reports/live_prices.json` every second,
+and detects Entry / Stop / TP1-3 touches against the latest scanner setups —
+ENTRY alerts only inside non-caution kill zones, STOP/TP always. The scanner prefers
+these tick prices (≤45s fresh) over REST, and the alarm task fires within ~1 minute
+of any touch.
+- *Network note:* `fstream.binance.com` accepts the handshake from some networks but
+  never delivers frames; `fstream.binancefuture.com` streams correctly (verified live).
+- *Remaining:* kline streams for intra-bar signal regeneration (structure still forms
+  on closed bars only — by design).
 
 ## Gap 2 — No order book / footprint  (OPEN)
 Scalpers live on depth, spread, and delta. K3's order-flow read is the per-bar
@@ -36,20 +43,23 @@ is charged, but live fills, partial fills, and liquidation mechanics are not sim
 - *To close:* testnet API keys + the `risk.portfolio_check` admission layer, behind the
   Fable5 provenance gate (`live` provenance only after paper track record).
 
-## Gap 6 — Scheduler granularity  (CLOSED ENOUGH)
-Blueprint schedules are cron-based; minimum sensible cadence for this workload is 15 min.
-That matches the DAY profile natively. For SCALP (5m), the job still catches every closed
-5m bar, but alerts arrive up to ~17 min after a 5m bar closes — fine for WATCH/ACTIVE
-setups that persist, not fine for 2-minute fade entries.
-- *To close:* interval trigger at 5–7 min once websocket consumer exists (Gap 1).
+## Gap 6 — Scheduler granularity  (CLOSED — 1-minute alarm path)
+Blueprint schedules are cron-based; the scanner stays at 15 min (matches the DAY profile
+natively and catches every closed 5m bar). Level-touch alerting no longer waits for the
+scanner: the live engine publishes `reports/stream_alert.json` and the alarm task's
+condition runs every 1 minute, so an Entry/SL/TP touch reaches the desktop within
+~1 minute, any hour, kill zone or not (ENTRY alerts remain kill-zone-gated).
+- *Remaining:* sub-minute push would need OS-level notifications from the daemon itself.
 
 ## Summary
 
 | Layer | Status |
 |---|---|
 | Signal quality on closed bars | Real-time-capable now (15-min cadence, zero missed closed bars) |
+| Tick-level mark prices | Live now — websocket engine, 1s cadence, launchd-persistent |
+| Entry / SL / TP touch alerts | Live now — ~1 min to desktop via alarm task |
 | Kill zones / session discipline | Live now |
-| Intra-bar scalping edge | Needs websockets — the one real gap for scalpers |
+| Intra-bar signal regeneration | Closed bars only (by design) |
 | Order book depth | Not built |
 | Historical positioning in research | Accrues automatically from the dashboard job |
 | Live order execution | Deliberately out of scope (signal/paper doctrine) |

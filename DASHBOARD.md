@@ -7,15 +7,34 @@ three pieces are recreated here in code form so the pipeline is reproducible.
 
 | Asset | Role | Cadence |
 |---|---|---|
-| **K3 Futures Scanner** (code Automation) | Scans the top-10 futures universe with `k3.py scan --live`, enriches every setup with live mark price, distance-to-entry, R-now, quantity/notional and kill-zone state, and delivers the artifact to the Widget. | Cron `8,23,38,53 * * * *` UTC (every 15 min) |
+| **K3 Live Engine** (`k3/livefeed.py`, launchd service) | Dependency-free websocket consumer (`fstream.binancefuture.com`, `!markPrice@arr@1s`) streaming tick mark prices for all symbols; detects Entry / Stop / TP1-3 touches against the latest scanner setups. ENTRY alerts fire only inside non-caution kill zones; STOP/TP always. | 1 s ticks, 24/7 |
+| **K3 Futures Scanner** (code Automation) | Scans the top-10 futures universe with `k3.py scan --live`; mark prices come from the live engine's tick file when ≤45 s fresh (REST fallback); enriches every setup with distance-to-entry, R-now, quantity/notional, kill-zone state and recent touch events; delivers the artifact to the Widget. | Cron `8,23,38,53 * * * *` UTC (every 15 min) |
 | **K3 Live Futures Board** (Widget) | World-class dark command UI: kill-zone hero with session progress, tradeable-now banner, trade tickets with Entry / SL / TP ladder / live mark / R-now / timeframe badges, score rings, price ladder. | Refreshes on every scanner delivery |
-| **K3 Kill-Zone Alarm** (condition Automation) | Checks the latest snapshot every 15 min; fires once per *new* tradeable setup signature (ACTIVE + gates pass + inside a kill zone, not caution). Appends to `reports/alarms.jsonl` and pushes a desktop notification that opens the board. | Condition, 15-min checks, fires only on new setups |
+| **K3 Kill-Zone Alarm** (condition Automation) | Checks every 1 min; fires once per *new* alert signature — either a live-engine touch (Entry in kill zone, or any Stop/TP hit) or a new tradeable setup (ACTIVE + gates pass + in kill zone). Appends to `reports/alarms.jsonl` and pushes a desktop notification that opens the board. | Condition, 1-min checks, fires only on new alerts |
 
 ## Data files produced
 
+- `reports/live_prices.json` — latest tick mark prices from the live engine (1 s).
+- `reports/stream_events.jsonl` — every detected Entry/SL/TP touch event.
+- `reports/stream_alert.json` — current alert signature + events (alarm input).
 - `reports/live_snapshots.jsonl` — one full scanner artifact per run (history).
 - `reports/alarms.jsonl` — one alarm record per fired kill-zone alert.
-- `reports/alarmed.json` — dedupe signature for the alarm condition.
+- `reports/alarmed.json`, `reports/live_state.json` — dedupe state.
+
+## Live engine service (macOS launchd)
+
+```bash
+# install / start
+cp launchd/com.kimi.k3.livefeed.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kimi.k3.livefeed.plist
+# stop / remove
+launchctl bootout gui/$(id -u)/com.kimi.k3.livefeed
+rm ~/Library/LaunchAgents/com.kimi.k3.livefeed.plist
+```
+
+Note: from some networks `fstream.binance.com` completes the websocket handshake
+but never delivers frames; the engine targets `fstream.binancefuture.com`, which
+streams correctly, and falls back to REST polling if the socket keeps failing.
 
 ## Kill zones (UTC)
 
@@ -32,7 +51,8 @@ tradeable-now list stays empty.
 
 ## Honest cadence note
 
-This stack refreshes on a 15-minute schedule, not tick-by-tick. Entry/SL/TP are
-computed from the signal bar; mark price is fetched live (20 s cache) at scan
-time. For true tick-level scalping see the websocket streamer roadmap in
-`REALTIME_GAPS.md`.
+Signals are computed from closed bars on a 15-minute schedule (closed-bar
+doctrine — no missed closed-bar signals). Level *tracking* is tick-level: the
+live engine streams mark prices every second and the alarm task pushes an
+Entry/SL/TP touch to the desktop within ~1 minute. The remaining gap is
+intra-bar signal regeneration and order-book depth — see `REALTIME_GAPS.md`.
