@@ -29,11 +29,14 @@ the ticket, and the board renders an ORDER FLOW chip row (adj / Δz / book / CVD
 Backtests are deliberately untouched — there is no order-flow history to replay.
 - *Remaining:* true level-2 footprint / cumulative-delta charting; absorption detection.
 
-## Gap 3 — OI delta endpoint intermittent  (OPEN, fail-open)
-`/futures/data/openInterestHist` returns nothing from some networks/regions, so
-`oi_delta_1h_pct` is often `None`. The fusion degrades gracefully (no OI confirm/boost),
-but the positioning group is then funding-z + taker flow only.
-- *To close:* run from a region where the endpoint is served, or proxy.
+## Gap 3 — OI delta endpoint intermittent  (CLOSED 2026-07-27 — root cause was a wrong URL)
+The original note blamed network/region blocking. The truth, found during the Phase-8
+console repurpose: `_get` prefixes every path with `FAPI = …/fapi/v1`, but
+`/futures/data/openInterestHist` lives at the host root — the request 404'd and the
+fail-open `except` swallowed it into `None`. It was never regional.
+*Fix:* `oi_delta_pct` now passes `base="https://fapi.binance.com"`. Verified live:
+BTC 15m OI Δ and ETH 15m OI Δ return real values. Lesson recorded in DOCTRINE.md
+spirit: a fail-open `except Exception: return None` hides root causes — log first.
 
 ## Gap 4 — Positioning history absent in backtests  (CLOSING — replay harness live)
 The scanner now accrues **both** histories on every 15-min run:

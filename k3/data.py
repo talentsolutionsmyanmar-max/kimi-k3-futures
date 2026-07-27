@@ -199,7 +199,8 @@ def oi_delta_pct(symbol: str, period: str = "1h", ttl: float = 300.0) -> Optiona
     def _f() -> Optional[float]:
         try:
             rows = _get("/futures/data/openInterestHist",
-                        {"symbol": symbol.upper(), "period": period, "limit": 2}, 15)
+                        {"symbol": symbol.upper(), "period": period, "limit": 2}, 15,
+                        base="https://fapi.binance.com")
             if not isinstance(rows, list) or len(rows) < 2:
                 return None
             prev, cur = float(rows[-2]["sumOpenInterest"]), float(rows[-1]["sumOpenInterest"])

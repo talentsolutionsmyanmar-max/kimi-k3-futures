@@ -1,5 +1,26 @@
 # KIMI K3 — Autonomous Crypto Futures Trading System
 
+> **STATUS: TRACK CLOSED (2026-07-27).** The five-group fusion was falsified under a
+> pre-registered protocol — no demonstrated, economically-viable edge at 5m/15m.
+> This repository is now a **measurement instrument and a doctrine**, not a signal
+> generator. Read [DOCTRINE.md](DOCTRINE.md) first; it is worth more than the code.
+
+**Three findings that outlive the project:**
+
+1. **Maker execution costs more than taker — 39.1 bps effective vs 15 bps.**
+   Measured honestly (strict fills, non-fills counted, missed-winner opportunity
+   cost included), "just use limit orders to cut fees" is *backwards* at this
+   horizon. Counterintuitive, transferable, and the most valuable thing K3 produced.
+2. **The composite scored worse than its own best component.** 0/32 FDR cells for
+   the fusion vs 17–20 for momentum alone — weighted-sum fusion over correlated,
+   oppositely-signed components destroys information. Validate components
+   individually; combine only what validates.
+3. **The measured market fact.** Crypto 5m/15m returns mean-revert weakly —
+   sign-stable 8/8 symbols, killzone-amplified, OOS-consistent 24/24 — worth
+   2.5–4.5 bps against a 15–16.5 bps cost floor. The signal exists and is roughly
+   a quarter of the size needed to pay for itself. Salvaging it needs maker
+   *rebates* — a different industry, not a tuning gap.
+
 **K3** is an original trading system for Binance USDT-M perpetual **scalping and day trading**
 on the top-10 crypto futures by volume. Signal/paper only — it never places orders.
 
