@@ -7,9 +7,10 @@ K3 asked whether a five-group ICT-style signal system could make money
 systematically on crypto perpetuals. It was run under a pre-registered
 falsification protocol — decision rules written before the data existed — across
 nine phases, three agents, and zero capital deployed. The answer, measured to the
-basis point: **the signal is real, persistent across timescales, and everywhere
-too small to pay its costs.** The program closed itself on schedule, by its own
-rule. That is a complete answer, and these are the things worth keeping from it.
+basis point: **the signal is real, persistent across timescales, and too small to
+pay its costs at every horizon tested.** The program closed itself on schedule, by
+its own rule. That is a complete answer, and these are the things worth keeping
+from it.
 
 ---
 
@@ -32,14 +33,18 @@ hit **16–20/32 depending on study and slice**. Weighted-sum fusion over
 correlated, oppositely-signed inputs destroys information. Validate components
 individually; combine only what validates. This generalises well beyond trading.
 
-**The reversion signal is real, persistent, and decays faster than friction
-improves.** Raw momentum IC, all-bars slice: **−0.066 at 15m → −0.030 at 1h**
-(−55% for a 4× horizon increase; killzone slice −0.075 → −0.019, −75%).
-Sign-stable throughout — 8/8 symbols and 24/24 OOS-consistent cells at 15m;
-7/8 OOS-consistent at 1h. The mechanistic
-reading: a microstructure effect dissipating as order-flow imbalance resolves.
-That is what forecloses the horizon argument on grounds stronger than arithmetic
-alone — the effect is *about* short timescales, not merely measured at them.
+**The reversion signal is real, persistent, and sized to its timescale — the
+shortfall is structural.** Raw momentum IC, all-bars slice: **−0.066 at 15m →
+−0.030 at 1h** (−55% for a 4× horizon increase; killzone slice −0.075 → −0.019,
+−75%). Sign-stable throughout — 8/8 symbols and 24/24 OOS-consistent cells at
+15m; 7/8 OOS-consistent at 1h. But scaled by each horizon's cost, the
+signal-to-friction ratio was approximately **invariant**: achieved/required IC
+0.32 at 15m and 0.34 at 1h — roughly 3× short of the clearing bar at both. (The
+killzone slice suggests degradation, 0.36 → 0.22, but carries the mask caveat in
+§3 and is the less reliable of the two.) The mechanistic reading: a
+microstructure effect proportionate to the timescale it is measured at. Horizon
+change did not help and did not meaningfully hurt — the shortfall is structural,
+not something a longer holding period trades away at the horizons measured.
 
 ## 2. The arithmetic that closed it
 
@@ -53,11 +58,12 @@ measured typical moves from `hzgate`):
 | 4h | 64–70 bp | ~17% | 0.039 | excluded at gate — underpowered (7.5–315 yrs) |
 | 24h | 171 bp | ~6% | 0.016 | excluded at gate — underpowered |
 
-One line carries the whole argument: **longer horizons improve the friction
-ratio but reduce the signal, and the second effect wins.** The gate passed only
-the 1h × 1h cell; the study ran that cell, one shot, 32 cells, and the spread
-came back 2.2 bp against a 10 bp clearing bar. Not validated. Binance taker was
-never close: required IC 0.29 at 1h — 4–8× anything ever measured.
+One line carries the whole argument: **across the two horizons actually
+measured, the signal-to-friction ratio was invariant — roughly 3× short of the
+clearing bar at both 15m and 1h.** The gate passed only the 1h × 1h cell; the
+study ran that cell, one shot, 32 cells, and the spread came back 2.2 bp against
+a 10 bp clearing bar. Not validated. Binance taker was never close: required IC
+0.29 at 1h — 4–8× anything ever measured.
 
 ## 3. The boundary — what was NOT tested
 
@@ -73,7 +79,10 @@ symbols.** Recorded as untested, not falsified:
   historical study frame. The established finding is "*taker flow* does not
   predict" (IC ≈ −0.02, 2–3/32 FDR), not "positioning does not predict."
 - **Daily and multi-day horizons.** 24h was excluded at the Stage 0 gate as
-  underpowered — not tested and rejected.
+  underpowered — not tested and rejected. The honest extrapolation: if the
+  measured ratio invariance held, a daily strategy would still be ~3× short of
+  the clearing bar; if a different phenomenon dominates at that timescale, it is
+  unknown either way. Recorded as untested.
 - **Killzone conditioning is caveated.** The mask labelled zone-close bars
   in-zone: 66.7% coverage at 1h against an intended ~52%, and 83.3% at 4h where
   conditioning is meaningless. All 8c killzone results carry this caveat.
