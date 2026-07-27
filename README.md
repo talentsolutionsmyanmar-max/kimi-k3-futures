@@ -7,7 +7,8 @@
 > **Nothing validated at any tested horizon — systematic trading is closed, with no
 > further horizons, venues, or conditionings to be tested.**
 > This repository is now a **measurement instrument and a doctrine**, not a signal
-> generator. Read [DOCTRINE.md](DOCTRINE.md) first; it is worth more than the code.
+> generator. Read [OBITUARY.md](OBITUARY.md) — the one-page answer to "what did K3
+> find?" — then [DOCTRINE.md](DOCTRINE.md); both are worth more than the code.
 
 **Three findings that outlive the project:**
 
