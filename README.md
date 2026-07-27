@@ -39,6 +39,8 @@ python k3.py tiercal --profile both             # tier recalibration: train 60% 
 python k3.py scalp2                             # Phase 5: OTE limit-entry mechanics vs market-entry baseline
 python k3.py ledger --profile both              # Phase 7: exit-event ledger — MFE/MAE, conversions, dumb baseline, conditional-MFE test
 python k3.py validity --profile both            # Phase 6: pre-registered IC protocol (5k+ bars, bootstrap null, BH-FDR, OOS, regimes)
+python k3.py fillmodel --profile both           # Phase 8b: limit-fill validation (strict fills, adverse selection, leak check)
+python k3.py condvalid --profile both           # Phase 8c: conditional validity — power check first, one pass, closes the track
 python k3.py replay                             # order-flow overlay validation (accruing)
 python k3.py scan --symbols BTCUSDT SOLUSDT --capital 25000 --profile day
 ```
@@ -195,6 +197,58 @@ stop-first convention on spanning bars — documented in `k3/ledger.py`). Findin
 
 No parameter was changed as a result of any of this. Measurement only.
 
+## Phase 8 — fill-model validation + conditional economics (2026-07-27)
+
+**8a — MAE control: the Phase 7 DAY conditional-MFE result is RETRACTED.** The
+matched-random bootstrap (1,000 iters, same construction) run on the adverse side
+shows ACTIVE trades' median MAE at the **100th percentile for depth** (−0.92R vs
+null −0.49R) alongside the 100th-percentile MFE, with an MFE/MAE ratio at only the
+71st percentile. Both sides of the excursion are extreme = **volatility/regime
+conditioning, not directional path edge**. The "path-level evidence" reading is
+withdrawn; the retraction stands in `k3/ledger.py` output (`mae_control_verdict`).
+
+**8b — Fill-model validation (`python3 k3.py fillmodel`).** Honest limit-fill
+simulation at the OTE pocket: strict trade-through fills only, non-fills counted,
+market-entry returns computed for every unfilled signal (the adverse-selection
+measurement), 8-bar window, plus a random-walk phantom-profit check.
+
+| | fill rate | filled ret | unfilled ret | effective maker RT | verdict |
+|---|---|---|---|---|---|
+| SCALP 5m | 56% | +11.6 bp | +21.4 bp | 20.6 bp | **ADVERSE_SELECTION + leak-check FAIL** — model invalid |
+| DAY 15m | 50% | +14.3 bp | +13.9 bp | **39.1 bp** | model defensible, but maker costs MORE than taker |
+
+The maker-cost claim does not survive measurement: on SCALP the fill model selects
+for losers and prints phantom profit on random walks (both pre-registered failure
+modes hit); on DAY it is structurally sound but its effective round-trip cost
+(39.1 bps including missed-winner opportunity cost) is **worse than the 15 bps
+taker RT**. Maker execution at OTE, as constructed, lowers no cost floor.
+
+**8c — Conditional validity, one pass (`python3 k3.py condvalid`).** Grid
+{liquidity, momentum-inverted} × {all bars, killzone} × {1,4,8,24} × 8 symbols,
+BH-FDR across the entire expanded grid, standing power doctrine applied in advance
+(DAY h=24 excluded as underpowered: detectable IC 0.36 > required 0.15).
+
+| group | profile | KZ mean IC | all-bars IC | FDR cells | OOS | KZ spread | floors | verdict |
+|---|---|---|---|---|---|---|---|---|
+| liquidity | DAY | +0.035 | +0.037 | 6/24 | 19/24 | 2.7 bp | 16.5 / 58.7 bp | NOT VALIDATED |
+| liquidity | SCALP | +0.020 | +0.010 | 1/32 | 19/24 | 2.5 bp | 16.5 / n/a | NOT VALIDATED |
+| momentum-inv | DAY | +0.075 | +0.066 | 20/24 | 24/24 | 4.5 bp | 16.5 / 58.7 bp | NOT VALIDATED |
+| momentum-inv | SCALP | +0.108 | +0.073 | 20/32 | 24/24 | 3.2 bp | 16.5 / n/a | NOT VALIDATED |
+
+The structural hypothesis behaved as hypothesized — killzone conditioning DOES
+raise momentum-inversion IC (SCALP 0.073 → 0.108, DAY 0.066 → 0.075), and the
+statistical signal is robust (FDR-surviving, OOS-consistent). It dies at the
+economic translation every time: 2.5–4.5 bps of quintile spread against a 16.5 bps
+floor. **STUDY VERDICT, both profiles: NO GROUP CONDITIONAL-VALIDATED — K3's
+systematic track closes under this protocol.** Published as plainly as the SCALP
+failure, per the doctrine that negative results carry equal prominence. The fusion
+score has no demonstrated, economically-viable predictive power at any tested
+horizon, conditioning, or execution model. What remains is infrastructure (live
+dashboard, alarms, ledger, harnesses) and one measured fact: crypto 5m/15m returns
+mean-revert weakly (momentum inversion) — statistically detectable, but too weak to
+pay for its own trading costs.
+
+
 
 ## Architecture
 
@@ -217,10 +271,12 @@ k3/
   groupstudy.py # per-group rank IC vs forward returns — edge measurement, not fitting
   tiercal.py    # train-only tier thresholds with breadth-gated OOS adoption verdict
   scalp2.py     # Phase 5: OTE limit-entry / maker-fee mechanics + baseline comparison
-  ledger.py     # Phase 7: exit-event ledger — MFE/MAE, TP conversion, dumb baseline, conditional-MFE test
+  ledger.py     # Phase 7: exit-event ledger — MFE/MAE, TP conversion, dumb baseline, conditional-MFE test (8a: MAE control)
   validity.py   # Phase 6: pre-registered IC protocol (bootstrap null, BH-FDR, OOS, regimes)
+  fillmodel.py  # Phase 8b: honest limit-fill simulation (strict trade-through, adverse selection, leak check)
+  condvalid.py  # Phase 8c: conditional validity grid — power doctrine first, one shot, closes the track
   screener.py   # all-perp universe screener (range / tape / drift / funding ranks)
-k3.py           # CLI: top10 | universe | scan | backtest | research | leaktest | causaltest | groupstudy | tiercal | scalp2 | ledger | validity | replay
+k3.py           # CLI: top10 | universe | scan | backtest | research | leaktest | causaltest | groupstudy | tiercal | scalp2 | ledger | validity | fillmodel | condvalid | replay
 reports/        # JSON artifacts of every run
 ```
 

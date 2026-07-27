@@ -261,6 +261,11 @@ def analysis_conditional_mfe(trades: pd.DataFrame, frames: Dict[str, pd.DataFram
     r = p.risk
     obs_median = float(act["mfe_r"].median())
     obs_mean = float(act["mfe_r"].mean())
+    # Phase 8a: MAE control — same matched-random construction on the adverse side.
+    # If ACTIVE trades show BOTH elevated MFE and deeper MAE vs null, the separation
+    # is volatility conditioning, not directional path edge (and gets retracted).
+    obs_mae = float(act["mae_r"].median())
+    obs_ratio = obs_median / max(abs(obs_mae), 1e-9)
 
     # pre-build per-symbol random-entry MFE pools: (bar, atr) candidates
     pools: Dict[str, Dict[str, Any]] = {}
@@ -269,7 +274,7 @@ def analysis_conditional_mfe(trades: pd.DataFrame, frames: Dict[str, pd.DataFram
         pools[sym] = {"h": df["high"].values, "l": df["low"].values,
                       "atr": atr, "n": len(df)}
 
-    def random_mfe(sym: str, side: int, hold: int) -> Optional[float]:
+    def random_excursions(sym: str, side: int, hold: int) -> Optional[Any]:
         pl = pools.get(sym)
         if pl is None or pl["n"] < 120:
             return None
@@ -280,38 +285,62 @@ def analysis_conditional_mfe(trades: pd.DataFrame, frames: Dict[str, pd.DataFram
         sd = r.atr_stop_mult * a
         entry = float(pl["h"][eb] + pl["l"][eb]) / 2.0      # mid of the random bar
         hh = pl["h"][eb:eb + hold + 1]; ll = pl["l"][eb:eb + hold + 1]
-        mfe = float(np.max(hh - entry)) if side == 1 else float(np.max(entry - ll))
-        return mfe / sd
+        if side == 1:
+            mfe = float(np.max(hh - entry)); mae = float(np.min(ll - entry))
+        else:
+            mfe = float(np.max(entry - ll)); mae = float(np.min(entry - hh))
+        return mfe / sd, mae / sd
 
-    null_medians: List[float] = []
+    null_mfe: List[float] = []
+    null_mae: List[float] = []
+    null_ratio: List[float] = []
     rows = list(act.itertuples())
     for _ in range(iters):
-        sample: List[float] = []
+        mfe_s: List[float] = []
+        mae_s: List[float] = []
         for t in rows:
             side = 1 if t.side == "LONG" else -1
             hold = max(2, int(t.bars_since_entry))
-            v = random_mfe(t.symbol, side, hold)
+            v = random_excursions(t.symbol, side, hold)
             if v is not None:
-                sample.append(v)
-        if sample:
-            null_medians.append(float(np.median(sample)))
-    if not null_medians:
+                mfe_s.append(v[0]); mae_s.append(v[1])
+        if mfe_s:
+            null_mfe.append(float(np.median(mfe_s)))
+            null_mae.append(float(np.median(mae_s)))
+            null_ratio.append(float(np.median(mfe_s) / max(abs(float(np.median(mae_s))), 1e-9)))
+    if not null_mfe:
         return {"error": "null construction failed"}
-    null = np.asarray(null_medians)
+    null = np.asarray(null_mfe)
+    nmae = np.asarray(null_mae)
+    nrat = np.asarray(null_ratio)
     pct = float((null < obs_median).mean() * 100)
+    mae_depth_pct = float((nmae > obs_mae).mean() * 100)   # 100 = observed MAE far DEEPER than null
+    ratio_pct = float((nrat < obs_ratio).mean() * 100)
+    if pct >= 95 and mae_depth_pct >= 95:
+        verdict = ("RETRACTED — MFE and MAE are BOTH extreme vs the random-entry null "
+                   "(volatility/regime conditioning, not directional path edge).")
+    elif pct >= 95:
+        verdict = ("DIRECTIONAL PATH EDGE CANDIDATE — MFE elevated while MAE is NOT "
+                   "deeper than null: favorable excursion is not explainable as raw "
+                   "volatility. Highest-priority finding pending Phase 8b/8c.")
+    else:
+        verdict = "no path-level separation from random entries at the 95th percentile."
     return {
         "n_active": int(len(act)),
         "active_median_mfe_r": round(obs_median, 3),
         "active_mean_mfe_r": round(obs_mean, 3),
         "null_median_of_medians_r": round(float(np.median(null)), 3),
         "null_p95_r": round(float(np.quantile(null, 0.95)), 3),
-        "observed_percentile_vs_null": round(pct, 1),
+        "mfe_percentile_vs_null": round(pct, 1),
+        "active_median_mae_r": round(obs_mae, 3),
+        "null_median_mae_r": round(float(np.median(nmae)), 3),
+        "mae_depth_percentile_vs_null": round(mae_depth_pct, 1),
+        "active_mfe_mae_ratio": round(obs_ratio, 3),
+        "null_median_ratio": round(float(np.median(nrat)), 3),
+        "ratio_percentile_vs_null": round(ratio_pct, 1),
         "iters": iters,
-        "reading": ("ACTIVE entries shift MFE right of the random-entry null (>=95th pct) — "
-                    "path-level evidence the signal predicts."
-                    if pct >= 95 else
-                    "ACTIVE-entry MFE does NOT separate from random entries at the 95th "
-                    "percentile — no path-level edge detected."),
+        "mae_control_verdict": verdict,
+        "reading": verdict,
         "caveat": ("MFE is direction-agnostic favorable excursion; separation can reflect "
                    "regime conditioning (ACTIVE fires in expansion regimes with longer "
                    "favorable runs even after ATR normalization), not directional skill. "

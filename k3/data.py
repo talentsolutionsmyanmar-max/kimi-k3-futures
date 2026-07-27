@@ -79,9 +79,22 @@ def klines(symbol: str, interval: str, limit: int = 500) -> pd.DataFrame:
     })
 
 
+_KL_DIR = __import__("pathlib").Path(__file__).resolve().parent.parent / "reports" / ".klcache"
+_KL_TTL = 6 * 3600  # 6h — study-scale history barely changes within a session
+
+
 def klines_history(symbol: str, interval: str, bars: int = 6000) -> pd.DataFrame:
     """Paginated klines going backward until `bars` rows (validity study needs
-    >= 5,000 bars per symbol — one /klines call caps at 1500)."""
+    >= 5,000 bars per symbol — one /klines call caps at 1500). Disk-cached 6h."""
+    import hashlib
+    try:
+        _KL_DIR.mkdir(parents=True, exist_ok=True)
+        key = hashlib.md5(f"{symbol}|{interval}|{bars}".encode()).hexdigest()[:16]
+        fp = _KL_DIR / f"{key}.pkl"
+        if fp.exists() and (time.time() - fp.stat().st_mtime) < _KL_TTL:
+            return pd.read_pickle(fp)
+    except Exception:
+        fp = None  # type: ignore[assignment]
     tf_ms = TF_MINUTES.get(interval, 15) * 60_000
     out: List[pd.DataFrame] = []
     end = None
@@ -110,7 +123,13 @@ def klines_history(symbol: str, interval: str, bars: int = 6000) -> pd.DataFrame
     if not out:
         return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume", "taker_buy"])
     df = pd.concat(out).drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
-    return df.tail(bars).reset_index(drop=True)
+    df = df.tail(bars).reset_index(drop=True)
+    try:
+        if fp is not None:
+            df.to_pickle(fp)
+    except Exception:
+        pass
+    return df
 
 
 def quote_volume_24h(symbol: str, ttl: float = 60.0) -> float:

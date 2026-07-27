@@ -178,6 +178,35 @@ def cmd_causaltest(a) -> None:
             sys.exit(1)
 
 
+def cmd_condvalid(a) -> None:
+    from k3.condvalid import print_report, study_profile
+    from k3.validity import SAMPLE
+    symbols = [s.upper() for s in a.symbols] if a.symbols else SAMPLE
+    # maker floors from the Phase 8b artifacts (SCALP maker model failed 8b -> None)
+    maker_rt = {"scalp": None, "day": 39.1}
+    for name in _profiles(a.profile):
+        p = get_profile(name)
+        mrt = a.maker_rt if a.maker_rt is not None else maker_rt.get(p.name.lower())
+        print(f"\n>>> K3 conditional validity | {p.name} {p.timeframe} | maker_rt={mrt}")
+        res = study_profile(symbols, p, bars=a.bars, maker_rt_bps=mrt)
+        print_report(res)
+        path = _save(f"k3_condvalid_{p.name}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+        print(f"\nreport: {path}")
+
+
+def cmd_fillmodel(a) -> None:
+    from k3.fillmodel import MAJORS5, print_report, run
+    symbols = [s.upper() for s in a.symbols] if a.symbols else MAJORS5
+    for name in _profiles(a.profile):
+        p = get_profile(name)
+        print(f"\n>>> K3 fill-model validation | {p.name} {p.timeframe} | {len(symbols)} symbols")
+        res = run(symbols, p, limit=a.limit, ote_level=a.ote, window=a.window,
+                  horizon=a.horizon, seeds=a.seeds)
+        print_report(res)
+        path = _save(f"k3_fillmodel_{p.name}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+        print(f"\nreport: {path}")
+
+
 def cmd_validity(a) -> None:
     from k3.validity import SAMPLE, print_report, validity
     symbols = [s.upper() for s in a.symbols] if a.symbols else SAMPLE
@@ -315,6 +344,24 @@ def main() -> None:
     p.add_argument("--symbols", nargs="*", default=None)
     p.add_argument("--bars", type=int, default=6000)
     p.set_defaults(fn=cmd_validity)
+
+    p = sub.add_parser("fillmodel")
+    p.add_argument("--profile", default="both", choices=["scalp", "day", "both"])
+    p.add_argument("--symbols", nargs="*", default=None)
+    p.add_argument("--limit", type=int, default=1500)
+    p.add_argument("--ote", type=float, default=0.705)
+    p.add_argument("--window", type=int, default=8)
+    p.add_argument("--horizon", type=int, default=24)
+    p.add_argument("--seeds", type=int, default=8)
+    p.set_defaults(fn=cmd_fillmodel)
+
+    p = sub.add_parser("condvalid")
+    p.add_argument("--profile", default="both", choices=["scalp", "day", "both"])
+    p.add_argument("--symbols", nargs="*", default=None)
+    p.add_argument("--bars", type=int, default=6000)
+    p.add_argument("--maker-rt", type=float, default=None,
+                   help="validated effective maker RT bps from fillmodel (8b); default day=39.1, scalp=None")
+    p.set_defaults(fn=cmd_condvalid)
 
     args = ap.parse_args()
     try:
