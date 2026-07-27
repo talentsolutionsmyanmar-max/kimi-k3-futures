@@ -40,7 +40,7 @@ import pandas as pd
 
 from . import data
 from .backtest import _tradable_now
-from .config import Profile
+from .config import TF_MINUTES, Profile
 from .data import atr_percentile
 from .killzones import active_zones  # noqa: F401  (parity reference)
 from .leaktest import random_walk_df
@@ -182,7 +182,7 @@ def simulate(symbol: str, p: Profile, limit: int = 1500, ote_level: float = 0.70
 def leak_check(p: Profile, seeds: int = 8, bars: int = 1200, ote_level: float = 0.705,
                window: int = 8, horizon: int = 24) -> Dict[str, Any]:
     """Phantom-profit check: the fill model on random walks must lose per signal."""
-    tf_min = 15 if p.timeframe == "15m" else 5
+    tf_min = TF_MINUTES.get(p.timeframe, 15)
     per: List[Dict[str, Any]] = []
     for seed in range(seeds):
         df = random_walk_df(seed, bars, tf_min)

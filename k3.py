@@ -178,6 +178,24 @@ def cmd_causaltest(a) -> None:
             sys.exit(1)
 
 
+def cmd_hzstudy(a) -> None:
+    from k3.hzstudy import print_report, run
+    symbols = [s.upper() for s in a.symbols] if a.symbols else None
+    res = run(symbols=symbols, bars=a.bars)
+    print_report(res)
+    path = _save(f"k3_hzstudy_1h_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+    print(f"\nreport: {path}")
+
+
+def cmd_hzgate(a) -> None:
+    from k3.hzgate import print_report, run
+    symbols = [s.upper() for s in a.symbols] if a.symbols else None
+    res = run(symbols=symbols, bars=a.bars, timeframes=a.tfs)
+    print_report(res)
+    path = _save(f"k3_hzgate_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json", res)
+    print(f"\nreport: {path}")
+
+
 def cmd_condvalid(a) -> None:
     from k3.condvalid import print_report, study_profile
     from k3.validity import SAMPLE
@@ -195,10 +213,14 @@ def cmd_condvalid(a) -> None:
 
 
 def cmd_fillmodel(a) -> None:
+    from dataclasses import replace
+
     from k3.fillmodel import MAJORS5, print_report, run
     symbols = [s.upper() for s in a.symbols] if a.symbols else MAJORS5
     for name in _profiles(a.profile):
         p = get_profile(name)
+        if a.tf:  # Phase 9 0(d): re-derive maker economics at another timeframe
+            p = replace(p, timeframe=a.tf, name=f"{p.name}@{a.tf}")
         print(f"\n>>> K3 fill-model validation | {p.name} {p.timeframe} | {len(symbols)} symbols")
         res = run(symbols, p, limit=a.limit, ote_level=a.ote, window=a.window,
                   horizon=a.horizon, seeds=a.seeds)
@@ -348,6 +370,7 @@ def main() -> None:
     p = sub.add_parser("fillmodel")
     p.add_argument("--profile", default="both", choices=["scalp", "day", "both"])
     p.add_argument("--symbols", nargs="*", default=None)
+    p.add_argument("--tf", default=None, help="override timeframe (e.g. 1h) for horizon re-derivation")
     p.add_argument("--limit", type=int, default=1500)
     p.add_argument("--ote", type=float, default=0.705)
     p.add_argument("--window", type=int, default=8)
@@ -362,6 +385,17 @@ def main() -> None:
     p.add_argument("--maker-rt", type=float, default=None,
                    help="validated effective maker RT bps from fillmodel (8b); default day=39.1, scalp=None")
     p.set_defaults(fn=cmd_condvalid)
+
+    p = sub.add_parser("hzgate")
+    p.add_argument("--symbols", nargs="*", default=None)
+    p.add_argument("--bars", type=int, default=8000)
+    p.add_argument("--tfs", nargs="*", default=["1h", "4h"])
+    p.set_defaults(fn=cmd_hzgate)
+
+    p = sub.add_parser("hzstudy")
+    p.add_argument("--symbols", nargs="*", default=None)
+    p.add_argument("--bars", type=int, default=8000)
+    p.set_defaults(fn=cmd_hzstudy)
 
     args = ap.parse_args()
     try:

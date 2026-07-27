@@ -97,10 +97,11 @@ it prevents:
   signal at this timescale, in bps, against its cost floor. Many traders are live
   right now believing the +$2,942 version of their own backtest. This project closed
   with capital intact and the number measured.
-- **The direction the arithmetic points**: horizon. At daily timeframes moves are
-  2–5% while costs stay ~0.11% — friction falls from a quarter of the available move
-  to a few percent of it, and a weak signal becomes viable. Any future work starts
-  there, under this same protocol, pre-registered from bar one.
+- ~~**The direction the arithmetic points**: horizon.~~ *Superseded by Phase 9
+  (below): the 1h horizon was tested under this protocol and failed; the
+  pre-registered rule then closed all systematic trading — no further horizons,
+  venues, or conditionings. The arithmetic's pointer is recorded here for honesty,
+  but the rule outranks the pointer.*
 
 ## 6. The doctrine, for reuse
 
@@ -114,5 +115,56 @@ it prevents:
    not a trading strategy.
 8. Negative results get equal prominence. They are the expensive kind of knowledge.
 
-*— K3, closed 2026-07-27. Protocol by Fable5/Quantrex CTO doctrine. Harnesses and
-data in this repository; every number reproducible from the CLI.*
+## 7. Phase 9 — the horizon pivot, tested and closed (2026-07-27)
+
+The doctrine's own pointer said longer horizons. Phase 9 tested that pointer under
+the identical protocol, in two stages with a hard stop between them.
+
+**Stage 0(a) — OI integrity audit: no retraction.** `g5_positioning` in every study
+feature frame (Phase 5, 8c, ledger) is built from per-bar **taker flow** in the
+klines (`taker_buy`, verified 0% null). Funding-z and OI-delta are *live-only
+engine overlays* by design (`apply_positioning_overlay`) — they never entered any
+historical study, so the OI endpoint bug (wrong base URL, 404 swallowed by a
+fail-open `except`) could not have nulled anything in a study frame. The ledger's
+`oi_delta: null` is documented design (no OI history at scale), and its funding
+map verified 93.7%+ populated. Fail-open audit: study loops record symbol errors
+explicitly (0 dropped symbols in 8c); the one dangerous class was `data.py` live
+positioning endpoints — fixed for OI. New rule: a fail-open `except` that returns
+`None` must log or count; silence is how the OI bug hid for a full phase.
+
+**Stage 0(b/c) — gate arithmetic (`python3 k3.py hzgate`).** Spread-per-IC slope
+c = 3.66 per unit σ, calibrated from 47 cells of the 8c DAY artifact. Typical
+moves: 1h 31bp, 4h 64–70bp, 24h 171bp. Required IC to clear floors with 2×
+margin: MEXC (5bp all-in) needs 0.088 at 1h, 0.039 at 4h; Binance (16.5bp) needs
+0.29 at 1h — 4–8× anything ever measured, dead on arrival. Detectable IC at 80%
+power (KZ slice, OOS): 0.061 at 1h×h=1 → **the only MEXC-powered cell in the
+grid**. Gate: PASS on that cell alone. Caveats recorded: the KZ mask labels
+zone-close bars in-zone, inflating KZ share at 1h (66.7% vs the intended ~52%)
+and making 4h KZ conditioning meaningless (83.3% of bars "in zone").
+
+**Stage 0(d) — maker economics re-derived, not inherited (`fillmodel --tf 1h`).**
+The 58.7bp maker floor was declared void at this horizon, then measured: 151
+setups, fill rate 28.5% (below the 60% sanity bound), unfilled signals +92.2bp
+vs filled +72.0bp → **ADVERSE_SELECTION at 1h too**, maker 13.8 vs market 60.9
+bp/signal, leak check PASS. The brief's hypothesis that longer working time
+rescues maker fills is falsified: the OTE level deepens with 1h ATR faster than
+the 8h window compensates. Maker is dead at both tested horizons.
+
+**Stage 1 — the study (`python3 k3.py hzstudy`), one shot, 32 cells.**
+Momentum tested **raw** per pre-registration: KZ mean IC **−0.019** (all-bars
+−0.030) — **reversion persists at 1h; it does not flip to momentum**. Weaker
+than at 15m (−0.075 raw) but sign-stable (7/8 OOS-consistent) with 2/8
+FDR-significant cells. Median |KZ quintile spread|: **2.2bp vs the 10bp MEXC
+clearing bar** → NOT VALIDATED. Liquidity: KZ IC −0.001, 0/8 FDR — the 15m
+liquidity effect does not exist at 1h → NOT VALIDATED.
+
+**Pre-registered decision, executed:** nothing validated at 1h, and the gate had
+already excluded 4h on power. **K3 systematic trading is closed on all tested
+horizons — 5m, 15m, and 1h — with no further horizons, venues, or conditionings
+to be tested.** The final market fact: the reversion signal is real, persistent
+across timescales, and everywhere too small to pay its costs. That is a complete
+answer.
+
+*— K3, closed 2026-07-27 on all tested horizons (5m/15m Phase 8; 1h Phase 9).
+Protocol by Fable5/Quantrex CTO doctrine. Harnesses and data in this repository;
+every number reproducible from the CLI.*
